@@ -13,3 +13,4 @@ backend/static/
 .vite/
 export-distillation-companion.md
 llm-roundtable-backend-plan.md
+context/jack_context.md
