@@ -1,0 +1,15 @@
+.env
+*.db
+.DS_Store
+.claude/
+chatgpt data/
+claude data/
+gemini data/
+__pycache__/
+*.pyc
+node_modules/
+dist/
+backend/static/
+.vite/
+export-distillation-companion.md
+llm-roundtable-backend-plan.md
