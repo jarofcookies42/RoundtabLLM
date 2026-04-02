@@ -4,7 +4,7 @@ Multi-model AI deliberation engine — four LLMs in a structured roundtable with
 
 ## What It Does
 
-You send a message. Four AI models respond in sequence, each seeing what the others said before it. The last model (the "anchor") sees everything and synthesizes. A shared memory document gives every model context about you, your projects, and your preferences.
+You send a message. Four AI models respond in sequence, each seeing what the others said before it. The last model (the "anchor") sees everything and synthesizes. A memory-as-hint system loads only relevant context per round, AutoDream consolidation keeps memory current, and a compaction pipeline keeps long conversations affordable.
 
 The result: richer, more nuanced answers than any single model produces alone.
 
@@ -15,7 +15,7 @@ The result: richer, more nuanced answers than any single model produces alone.
 | Claude | Sonnet 4.6 (thinking: enabled) | Opus 4.6 (thinking: adaptive) |
 | GPT | 5.4 (no reasoning) | 5.4 (high reasoning) |
 | Gemini | 3.1 Pro (low think) | 3.1 Pro (Deep Think Mini) |
-| Grok | 4.20 non-reasoning | 4.20 multi-agent |
+| Grok | 4.20 non-reasoning | 4.20 reasoning |
 
 ## Two Modes
 
