@@ -1,0 +1,14 @@
+.env
+*.db
+.DS_Store
+.claude/
+chatgpt data/
+claude data/
+gemini data/
+__pycache__/
+*.pyc
+node_modules/
+dist/
+.vite/
+frontend/
+context/jack_context.md

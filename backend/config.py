@@ -1,5 +1,5 @@
 """
-Configuration for LLM Roundtable.
+Configuration for RoundtabLLM.
 All model configs, mode definitions, and env var loading.
 """
 import os
@@ -16,7 +16,9 @@ GROK_API_KEY = os.getenv("GROK_API_KEY", "")
 AUTH_TOKEN = os.getenv("AUTH_TOKEN", "changeme")
 
 # --- Database ---
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./roundtable.db")
+# Use /data/roundtable.db on Railway (persistent volume), local file otherwise
+_default_db = "sqlite:////data/roundtable.db" if os.path.isdir("/data") else "sqlite:///./roundtable.db"
+DATABASE_URL = os.getenv("DATABASE_URL", _default_db)
 
 # --- Model Definitions ---
 
@@ -84,9 +86,9 @@ REGULAR_MODELS = {
         top_p=0.95,
     ),
     "grok": ModelConfig(
-        model_id="grok-4-1-fast-non-reasoning",
+        model_id="grok-4.20-non-reasoning",
         provider="grok",
-        display_name="Grok",
+        display_name="Grok 4.20",
         color="#EC4899",
         icon="✕",
         temperature=0.7,
@@ -127,9 +129,9 @@ OVERDRIVE_MODELS = {
         top_p=0.95,
     ),
     "grok": ModelConfig(
-        model_id="grok-4-1-fast-reasoning",
+        model_id="grok-4.20-multi-agent",
         provider="grok",
-        display_name="Grok",
+        display_name="Grok 4.20",
         color="#EC4899",
         icon="✕",
         temperature=0.9,

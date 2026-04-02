@@ -8,7 +8,7 @@ A self-hosted multi-LLM deliberation engine. Jack sends a message, and 2-4 AI mo
 
 - **Backend:** FastAPI (Python), SQLite via SQLModel, SSE streaming
 - **Frontend:** React + Vite, dark theme, JetBrains Mono + Sora fonts
-- **Deploy target:** Railway
+- **Deploy target:** Railway (live at production URL)
 
 ## Implementation Status
 
@@ -18,9 +18,11 @@ A self-hosted multi-LLM deliberation engine. Jack sends a message, and 2-4 AI mo
 - **Phase 3A:** Debate role assignment UI with constraint enforcement
 - **Phase 3B:** Session-to-artifact markdown export
 - **Phase 3C:** Artifact uploader (file attach to chat input)
-- **Core:** All four model clients, mode/anchor switching, context system, import pipeline, auth, deploy config
+- **Core:** All four model clients, mode/anchor switching, context system, import pipeline, auth, deploy config, static file serving for production
 
-### Future Work (TODO)
+### Future Work
+- **Phase 4 — Memory Architecture:** Persistent memory, per-model preference tracking, conversation summaries
+- **Phase 5 — Imports:** Full import pipeline for ChatGPT/Gemini/Claude exports with conversation replay
 - **Forced Dissent mode** — inject "you MUST disagree" into system prompts. Toggle in UI alongside protocol selector.
 - **Divergence Heatmap** — semantic similarity tracking between model responses per round with color-coded UI grid.
 - **Chain-of-Thought Leakage Monitor** — detect when thinking_content themes bleed into visible responses. Flag with warning badge.
@@ -36,22 +38,22 @@ Toggled by a single switch in the UI header:
 | Claude Sonnet 4.6 | `thinking: {type: "enabled", budget_tokens: 4096}`, `max_tokens: 8192` |
 | GPT-5.4 | `reasoning_effort: "none"`, `verbosity: "medium"`, `max_tokens: 1024` |
 | Gemini 3.1 Pro | `temperature: 1.0`, `thinking_level: "low"`, `top_p: 0.95`, `max_tokens: 2048` |
-| Grok (`grok-4-1-fast-non-reasoning`) | `temperature: 0.7`, `max_tokens: 1024` |
+| Grok 4.20 (`grok-4.20-non-reasoning`) | `temperature: 0.7`, `max_tokens: 1024` |
 
 ### Maximum Overdrive (~$0.15-0.40/round)
 | Model | Config |
 |-------|--------|
-| Claude Opus 4.6 | `thinking: {type: "adaptive"}`, `max_tokens: 32000`, `effort: "max"` |
+| Claude Opus 4.6 | `thinking: {type: "adaptive"}`, `max_tokens: 32000` |
 | GPT-5.4 | `reasoning_effort: "high"`, `verbosity: "high"`, `max_tokens: 2048` |
 | Gemini 3.1 Pro | `temperature: 1.0`, `thinking_level: "high"` (Deep Think Mini), `top_p: 0.95`, `max_tokens: 4096` |
-| Grok (`grok-4-1-fast-reasoning`) | `temperature: 0.9`, `max_tokens: 2048` |
+| Grok 4.20 (`grok-4.20-multi-agent`) | `temperature: 0.9`, `max_tokens: 2048` |
 
 ## Two Anchor Modes
 
 Independent toggle from Regular/Overdrive. Controls which model responds LAST (the "anchor"):
 
-- **Knowledge anchor** → Claude goes last. Order: Grok → GPT → Gemini → Claude. Best for professional knowledge work, coding, nuanced analysis.
-- **Abstract anchor** → Gemini goes last. Order: Grok → GPT → Claude → Gemini. Best for abstract reasoning, novel logic, scientific synthesis.
+- **Knowledge anchor** — Claude goes last. Order: Grok -> GPT -> Gemini -> Claude. Best for professional knowledge work, coding, nuanced analysis.
+- **Abstract anchor** — Gemini goes last. Order: Grok -> GPT -> Claude -> Gemini. Best for abstract reasoning, novel logic, scientific synthesis.
 
 The anchor model gets the richest context because it sees all other models' responses before generating its own.
 
@@ -60,7 +62,7 @@ The anchor model gets the richest context because it sees all other models' resp
 ### Roundtable (default)
 Sequential round-robin. Each model sees all previous responses. The anchor goes last and sees everything. Implemented in `run_round()`.
 
-### Blind → Synthesis
+### Blind -> Synthesis
 All models answer independently in parallel (no visibility of each other). After all finish, the anchor gets all responses and synthesizes. Implemented in `run_blind()`. Uses `asyncio.Queue` for interleaved parallel SSE streaming.
 
 ### Debate
@@ -78,8 +80,8 @@ Protocol-specific system prompts are defined in `PROTOCOL_PROMPTS` dict in `back
 ### Claude (thinking_content stored)
 Claude's `thinking` blocks are captured during streaming via the `ThinkingStream` wrapper class in `backend/llm/claude.py`. The wrapper intercepts `content_block_start` and `content_block_delta` events, accumulating thinking text separately from visible response text. After streaming completes, `thinking_content` is saved to the Message record. Only visible `text` blocks are streamed to the frontend.
 
-### Gemini (wired but unsupported)
-The Gemini client is wired to pass `include_thoughts=True` in generation config, but the Google GenAI SDK doesn't yet support thought extraction for Gemini 3.1 Pro. `thinking_content` is stored as `None`.
+### Gemini (thinking_config wired)
+The Gemini client passes `thinking_config` with appropriate `thinking_budget` to the Google GenAI SDK. In regular mode (`thinking_level: "low"`), budget is 1024 tokens. In overdrive (`thinking_level: "high"`), budget is unlimited (-1), activating Deep Think Mini. Thought extraction from the SDK response is pending — `thinking_content` is stored as `None`.
 
 ### GPT-5.4 and Grok (hidden by API)
 Both models' reasoning tokens are hidden by their respective APIs. You pay for reasoning tokens but they don't appear in the response. `thinking_content` is stored as `None`.
@@ -91,7 +93,7 @@ These cause API errors or degraded output if violated:
 - **Claude:** When `thinking` is enabled, temperature and top_k CANNOT be set at all. Do not pass temperature when using thinking mode.
 - **GPT-5.4:** Temperature is LOCKED at 1. Passing any other value returns a 400 error. The only control knob is `reasoning_effort`.
 - **Gemini 3.1 Pro:** Temperature MUST stay at 1.0. Values below 1.0 cause response looping and performance degradation. Google explicitly warns against changing it.
-- **Grok:** Only model where temperature is a free parameter (0.0–1.0).
+- **Grok 4.20:** Temperature is a free parameter (0.0-2.0). Only model where it matters.
 
 ## API Details
 
@@ -125,7 +127,7 @@ Claude requires alternating user/assistant messages. All non-Claude model messag
 client.chat.completions.create(
     model="gpt-5.4",
     messages=formatted_messages,
-    max_tokens=1024,
+    max_completion_tokens=1024,
     # temperature not passed — only default (1) is supported
 )
 
@@ -133,38 +135,51 @@ client.chat.completions.create(
 client.chat.completions.create(
     model="gpt-5.4",
     messages=formatted_messages,
-    max_tokens=2048,
+    max_completion_tokens=2048,
     reasoning_effort="high",
 )
 ```
 
 ### Gemini 3.1 Pro (Google GenAI SDK) — `backend/llm/gemini.py`
 ```python
-model = genai.GenerativeModel("gemini-3.1-pro-preview")
-response = model.generate_content(
+client.aio.models.generate_content(
+    model="gemini-3.1-pro-preview",
     contents=formatted_contents,
-    generation_config=genai.GenerationConfig(
+    config=types.GenerateContentConfig(
+        system_instruction=system_prompt,
         temperature=1.0,
         top_p=0.95,
         max_output_tokens=2048,  # 4096 in Overdrive
+        thinking_config=types.ThinkingConfig(thinking_budget=1024),  # -1 in Overdrive
     ),
 )
 ```
 Gemini uses "user"/"model" roles (not "assistant"). System instructions are separate via `system_instruction` parameter.
 
-### Grok (OpenAI-compatible via xAI) — `backend/llm/grok.py`
+### Grok 4.20 (OpenAI-compatible via xAI) — `backend/llm/grok.py`
 ```python
 client = openai.OpenAI(
     api_key=grok_key,
     base_url="https://api.x.ai/v1",
 )
+
+# Regular
 client.chat.completions.create(
-    model="grok-4-1-fast-non-reasoning",  # grok-4-1-fast-reasoning in Overdrive
+    model="grok-4.20-non-reasoning",
     messages=formatted_messages,
-    temperature=0.7,  # 0.9 in Overdrive
-    max_tokens=1024,  # 2048 in Overdrive
+    temperature=0.7,
+    max_tokens=1024,
+)
+
+# Overdrive (multi-agent: 4 internal agents — coordinator, researcher, logic/math, creative/contrarian)
+client.chat.completions.create(
+    model="grok-4.20-multi-agent",
+    messages=formatted_messages,
+    temperature=0.9,
+    max_tokens=2048,
 )
 ```
+Multi-agent mode has similar per-token pricing ($2/$6 per M input/output) but higher actual token consumption due to internal agent collaboration.
 
 ## Message History Formatting
 
@@ -201,11 +216,11 @@ Filename format: `roundtabllm-{id}-{date}.md`. Frontend triggers browser downloa
 
 ## Artifact Uploader
 
-Files can be attached to chat messages via drag-and-drop or the 📎 button in the input bar.
+Files can be attached to chat messages via drag-and-drop or the paperclip button in the input bar.
 
 - **Supported types:** `.md`, `.txt`, `.py`, `.json`, `.js`, `.ts`, `.jsx`, `.tsx`, `.css`, `.html`, `.yaml`, `.yml`, `.toml`, `.csv`, `.pdf`
 - **Size limits:** 100KB for text files, 1MB for PDFs
-- File contents are prepended to the message in a fenced code block: `[Attached: filename]\n```\n...content...\n````
+- File contents are prepended to the message in a fenced code block: `[Attached: filename]\n` followed by the content in a code fence
 - A file chip shows the filename and size above the input bar with a dismiss button.
 
 ## Routes
@@ -234,58 +249,63 @@ data: {"type": "model_error", "model": "claude", "error": "timeout"}
 data: {"type": "round_done"}
 ```
 
+SSE responses include `Cache-Control: no-cache`, `X-Accel-Buffering: no`, and `Connection: keep-alive` headers to prevent reverse proxy buffering.
+
 ## Project Structure
 
 ```
 roundtabllm/
-├── CLAUDE.md               ← technical documentation (you are here)
-├── README.md               ← project README for GitHub
-├── Procfile                ← Railway process definition
-├── railway.toml            ← Railway deploy config
-├── .env.example            ← template for environment variables
+├── CLAUDE.md               <- technical documentation (you are here)
+├── README.md               <- project README for GitHub
+├── Procfile                <- Railway process definition
+├── railway.toml            <- Railway deploy config
+├── requirements.txt        <- root requirements (points to backend/requirements.txt)
+├── .env.example            <- template for environment variables
 ├── .gitignore
+├── .railwayignore          <- Railway-specific ignore (includes frontend/ source)
 ├── context/
-│   └── jack_context.md     ← seed context document
+│   └── jack_context.md     <- seed context document
 ├── backend/
 │   ├── __init__.py
-│   ├── main.py             ← FastAPI app, all routes
-│   ├── config.py           ← env vars, model configs, mode definitions
-│   ├── models.py           ← SQLModel schemas (Conversation, Message, ContextDoc, RawImport)
-│   ├── database.py         ← SQLite setup + migrations
+│   ├── main.py             <- FastAPI app, all routes, static file serving
+│   ├── config.py           <- env vars, model configs, mode definitions
+│   ├── models.py           <- SQLModel schemas (Conversation, Message, ContextDoc, RawImport)
+│   ├── database.py         <- SQLite setup + migrations
 │   ├── requirements.txt
 │   ├── llm/
 │   │   ├── __init__.py
-│   │   ├── router.py       ← protocol orchestrator (roundtable, blind, debate) + SSE streaming
-│   │   ├── claude.py       ← Anthropic client + ThinkingStream wrapper
-│   │   ├── openai_client.py ← GPT-5.4 client
-│   │   ├── gemini.py       ← Google GenAI client
-│   │   └── grok.py         ← Grok client (OpenAI-compat via xAI)
+│   │   ├── router.py       <- protocol orchestrator (roundtable, blind, debate) + SSE streaming
+│   │   ├── claude.py       <- Anthropic client + ThinkingStream wrapper
+│   │   ├── openai_client.py <- GPT-5.4 client
+│   │   ├── gemini.py       <- Google GenAI client + thinking_config support
+│   │   └── grok.py         <- Grok 4.20 client (OpenAI-compat via xAI)
 │   ├── context/
-│   │   └── __init__.py     ← context assembly, system prompts, PROTOCOL_PROMPTS
-│   └── importers/
-│       ├── __init__.py
-│       ├── chatgpt.py      ← parse ChatGPT export JSON
-│       ├── gemini.py       ← parse Google Takeout Gemini data
-│       └── claude_export.py ← parse Claude export JSON
+│   │   ├── __init__.py     <- context assembly, system prompts, PROTOCOL_PROMPTS
+│   │   └── engine.py       <- context engine utilities
+│   ├── importers/
+│   │   ├── __init__.py
+│   │   ├── chatgpt.py      <- parse ChatGPT export JSON
+│   │   ├── gemini.py       <- parse Google Takeout Gemini data
+│   │   └── claude_export.py <- parse Claude export JSON
+│   └── static/             <- Vite build output (gitignored, included in Railway deploy)
 ├── frontend/
 │   ├── index.html
 │   ├── package.json
 │   ├── vite.config.js
 │   └── src/
 │       ├── main.jsx
-│       ├── App.jsx          ← main app shell, state management, tab routing
-│       ├── api.js           ← fetch wrappers for backend + export download
+│       ├── App.jsx          <- main app shell, state management, tab routing
+│       ├── api.js           <- fetch wrappers for backend + export download
 │       ├── hooks/
-│       │   └── useSSE.js    ← Server-Sent Events streaming hook
+│       │   └── useSSE.js    <- Server-Sent Events streaming hook
 │       └── components/
-│           ├── ChatView.jsx      ← message list + input + file attach (drag-and-drop)
-│           ├── MessageBubble.jsx ← per-model styled message + protocol role badges
-│           ├── ModelChips.jsx    ← model toggles + debate role assignment (P/C/S badges)
-│           ├── ModeToggle.jsx    ← Regular / Maximum Overdrive switch
-│           ├── AnchorToggle.jsx  ← Knowledge / Abstract anchor switch
-│           ├── ProtocolToggle.jsx ← Roundtable / Blind / Debate cycle toggle
-│           └── ContextEditor.jsx ← shared memory document editor
-└── backend/static/          ← Vite build output (gitignored)
+│           ├── ChatView.jsx      <- message list + input + file attach (drag-and-drop)
+│           ├── MessageBubble.jsx <- per-model styled message + protocol role badges
+│           ├── ModelChips.jsx    <- model toggles + debate role assignment (P/C/S badges)
+│           ├── ModeToggle.jsx    <- Regular / Maximum Overdrive switch
+│           ├── AnchorToggle.jsx  <- Knowledge / Abstract anchor switch
+│           ├── ProtocolToggle.jsx <- Roundtable / Blind / Debate cycle toggle
+│           └── ContextEditor.jsx <- shared memory document editor
 ```
 
 ## Environment Variables
@@ -306,8 +326,11 @@ AUTH_TOKEN=some-random-string-for-simple-auth
 - Parallel calls in Blind and Debate proposal phases (independence is the point)
 - Sonnet default, Opus only in Overdrive (cost savings for similar quality)
 - Temperature is effectively fixed at 1.0 for Claude/GPT/Gemini — thinking/reasoning params are the real control knobs
+- Grok 4.20 is the only model with free temperature control
 - Debate anonymization ensures fair critique regardless of model identity
 - Protocol role assignment is user-controllable but has sensible position-based defaults
+- Frontend built to `backend/static/` and served by FastAPI in production with SPA fallback
+- Root `requirements.txt` re-exports `backend/requirements.txt` for Nixpacks detection on Railway
 
 ## Style Notes
 
@@ -318,3 +341,7 @@ AUTH_TOKEN=some-random-string-for-simple-auth
 - Each message has a colored left border matching its model
 - Anchor model messages get a subtle "anchor" badge
 - Debate messages get protocol role badges (proposal/critic/synthesis)
+
+## Built With
+
+This application was built entirely by Claude Code. All four models (Claude Sonnet/Opus 4.6, GPT-5.4, Gemini 3.1 Pro, Grok 4.20) are used as participants in the roundtable.

@@ -27,7 +27,10 @@ Future protocols / features:
 """
 import json
 import asyncio
+import logging
 from typing import AsyncGenerator
+
+logger = logging.getLogger("roundtable.router")
 from sqlmodel import Session, select
 
 from ..config import get_active_config, ModelConfig
@@ -125,6 +128,7 @@ async def run_round(
 
         except Exception as e:
             error_msg = str(e)
+            logger.error("Model %s failed: %s", model_key, error_msg, exc_info=True)
             yield _sse({"type": "model_error", "model": model_key, "error": error_msg})
 
             # Save error as message so it shows in history

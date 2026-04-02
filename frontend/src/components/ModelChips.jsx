@@ -10,13 +10,13 @@ const MODE_LABELS = {
     claude: "Sonnet 4.6",
     gpt: "none reasoning",
     gemini: "low think",
-    grok: "t=0.7",
+    grok: "non-reasoning",
   },
   overdrive: {
     claude: "Opus 4.6",
     gpt: "high reasoning",
     gemini: "Deep Think",
-    grok: "reasoning",
+    grok: "multi-agent",
   },
 };
 

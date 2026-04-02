@@ -1,5 +1,5 @@
 """
-LLM Roundtable — FastAPI backend.
+RoundtabLLM — FastAPI backend.
 
 Routes:
   POST   /chat                  — send a message, returns conversation_id
@@ -10,8 +10,11 @@ Routes:
   POST   /context               — update shared context document
   POST   /import/{platform}     — upload a chat export (chatgpt, gemini, claude)
 """
+import os
+from pathlib import Path
+
 from fastapi import FastAPI, Depends, HTTPException, Request, UploadFile, File
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import StreamingResponse, Response, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -34,7 +37,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="LLM Roundtable", lifespan=lifespan)
+app = FastAPI(title="RoundtabLLM", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -193,7 +196,15 @@ async def stream_chat(
             ):
                 yield event
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @app.get("/conversations")
@@ -255,7 +266,7 @@ async def export_conversation(
     from datetime import datetime as _dt
     date_str = conv.created_at.strftime("%Y-%m-%d")
     lines = [
-        f"# LLM Roundtable — Session {conversation_id}",
+        f"# RoundtabLLM — Session {conversation_id}",
         "",
         "| Key | Value |",
         "| --- | --- |",
@@ -371,3 +382,20 @@ async def import_export(
         "conversations_parsed": len(conversations),
         "total_messages": sum(len(c["messages"]) for c in conversations),
     }
+
+
+# --- Static file serving (production) ---
+# Vite builds to backend/static/. Serve assets and fall back to index.html for SPA routing.
+
+_static_dir = Path(__file__).parent / "static"
+
+if _static_dir.is_dir():
+    app.mount("/assets", StaticFiles(directory=_static_dir / "assets"), name="assets")
+
+    @app.get("/{path:path}")
+    async def spa_fallback(path: str):
+        """Serve static files or fall back to index.html for SPA routing."""
+        file = _static_dir / path
+        if file.is_file():
+            return FileResponse(file)
+        return FileResponse(_static_dir / "index.html")

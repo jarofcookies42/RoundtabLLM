@@ -4,56 +4,59 @@ Multi-model AI deliberation engine — four LLMs in a structured roundtable with
 
 ## What It Does
 
-Send a message, and 2-4 AI models respond in sequence. Each model sees the full conversation including other models' responses, creating a genuine multi-perspective deliberation. A shared context document keeps all models aware of your background and preferences.
+You send a message. Four AI models respond in sequence, each seeing what the others said before it. The last model (the "anchor") sees everything and synthesizes. A shared memory document gives every model context about you, your projects, and your preferences.
 
-**Four models:** Claude (Anthropic), GPT-5.4 (OpenAI), Gemini 3.1 Pro (Google), Grok (xAI)
+The result: richer, more nuanced answers than any single model produces alone.
 
-## Modes
+## Models
 
-| Mode | Cost | Config |
-|------|------|--------|
-| **Regular** | ~$0.02/round | Sonnet 4.6, GPT-5.4 (no reasoning), Gemini (low think), Grok (fast) |
-| **Maximum Overdrive** | ~$0.15-0.40/round | Opus 4.6 (adaptive thinking), GPT-5.4 (high reasoning), Gemini (Deep Think Mini), Grok (reasoning) |
+| Slot | Regular Mode | Overdrive Mode |
+|------|-------------|----------------|
+| Claude | Sonnet 4.6 (thinking: enabled) | Opus 4.6 (thinking: adaptive) |
+| GPT | 5.4 (no reasoning) | 5.4 (high reasoning) |
+| Gemini | 3.1 Pro (low think) | 3.1 Pro (Deep Think Mini) |
+| Grok | 4.20 non-reasoning | 4.20 multi-agent |
 
-## Anchor Modes
+## Two Modes
 
-Controls which model responds last, giving it the richest context:
+- **Regular** (~$0.02/round) — Fast, cheap, good for casual questions
+- **Maximum Overdrive** (~$0.15-0.40/round) — All models at maximum reasoning depth
 
-- **Knowledge anchor** — Claude last. Best for professional work, coding, nuanced analysis.
-- **Abstract anchor** — Gemini last. Best for abstract reasoning, novel logic, scientific synthesis.
+## Two Anchors
 
-## Protocols
+- **Knowledge anchor** — Claude goes last. Best for professional work, coding, analysis.
+- **Abstract anchor** — Gemini goes last. Best for abstract reasoning, novel logic, scientific synthesis.
 
-- **Roundtable** — Sequential round-robin. Each model sees all previous responses.
-- **Blind -> Synthesis** — All models answer independently in parallel. The anchor then synthesizes all responses.
-- **Debate** — Two proposers answer blind. A critic evaluates anonymized proposals. An arbiter synthesizes with full attribution restored. Roles are user-assignable.
+## Three Protocols
+
+- **Roundtable** — Sequential round-robin. Each model builds on previous responses.
+- **Blind -> Synthesis** — All models answer independently in parallel, then the anchor synthesizes.
+- **Debate** — Two proposers (blind), one anonymized critic, one arbiter. Structured deliberation with role assignment UI.
 
 ## Quick Start
 
-```bash
-# Clone and setup
-git clone <repo-url> roundtabllm
-cd roundtabllm
-cp .env.example .env
-# Fill in your API keys in .env
+### Backend
 
-# Backend
+```bash
 cd backend
 pip install -r requirements.txt
 cd ..
 uvicorn backend.main:app --reload --port 8000
+```
 
-# Frontend (separate terminal)
+### Frontend
+
+```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-Open http://localhost:3000 and enter your auth token.
+Open **http://localhost:3000** and enter your auth token.
 
 ## Environment Variables
 
-Create a `.env` file in the project root:
+Create a `.env` in the project root (see `.env.example`):
 
 ```
 ANTHROPIC_API_KEY=sk-ant-...
@@ -63,35 +66,36 @@ GROK_API_KEY=xai-...
 AUTH_TOKEN=your-secret-token
 ```
 
-## Tech Stack
-
-- **Backend:** Python, FastAPI, SQLite (SQLModel), SSE streaming
-- **Frontend:** React, Vite, vanilla CSS-in-JS
-- **LLM SDKs:** Anthropic, OpenAI, Google GenAI, xAI (OpenAI-compatible)
-
 ## Deploy to Railway
 
 ```bash
-railway up
+# Build frontend
+cd frontend && npm run build && cd ..
+
+# Install Railway CLI and deploy
+npm install -g @railway/cli
+railway login
+railway init --name roundtabllm
+railway up --no-gitignore --detach
+railway domain
+railway variables set \
+  ANTHROPIC_API_KEY="..." \
+  OPENAI_API_KEY="..." \
+  GOOGLE_AI_API_KEY="..." \
+  GROK_API_KEY="..." \
+  AUTH_TOKEN="..."
 ```
 
-Set all environment variables in the Railway dashboard. The app serves the frontend as static files from the backend.
+## Tech Stack
 
-## Features
-
-- Real-time SSE streaming with per-model typing indicators
-- Thinking/reasoning capture (Claude thinking blocks stored and exportable)
-- Session export to markdown with metadata, messages, and collapsed thinking sections
-- File attachment via drag-and-drop (supports .md, .txt, .py, .json, .pdf, and more)
-- Shared context/memory document editable in-app
-- Chat history import from ChatGPT, Gemini, and Claude exports
-- Model enable/disable toggles with per-model config display
-- Debate role assignment with constraint enforcement
+- **Backend:** FastAPI, SQLite (SQLModel), SSE streaming
+- **Frontend:** React + Vite
+- **Deploy:** Railway (Nixpacks)
 
 ## Documentation
 
-See [CLAUDE.md](CLAUDE.md) for detailed technical documentation including API details, architecture decisions, message formatting rules, and temperature constraints.
+See [CLAUDE.md](CLAUDE.md) for detailed technical documentation — API details, architecture, message formatting, protocol implementations, and configuration reference.
 
 ## Built With
 
-[Claude](https://anthropic.com) | [GPT-5.4](https://openai.com) | [Gemini 3.1 Pro](https://deepmind.google) | [Grok](https://x.ai)
+Built entirely by [Claude Code](https://claude.ai). Powered by Claude Sonnet/Opus 4.6, GPT-5.4, Gemini 3.1 Pro, and Grok 4.20.

@@ -62,12 +62,7 @@ async def call(messages: list[dict], config: ModelConfig, system_prompt: str) ->
     response = await client.aio.models.generate_content(
         model=config.model_id,
         contents=messages,
-        config=types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            temperature=gen_config["temperature"],
-            top_p=gen_config.get("top_p"),
-            max_output_tokens=gen_config["max_output_tokens"],
-        ),
+        config=_build_generate_config(gen_config, system_prompt),
     )
     return response.text or ""
 
@@ -84,12 +79,7 @@ async def call_stream(
     stream = await client.aio.models.generate_content_stream(
         model=config.model_id,
         contents=messages,
-        config=types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            temperature=gen_config["temperature"],
-            top_p=gen_config.get("top_p"),
-            max_output_tokens=gen_config["max_output_tokens"],
-        ),
+        config=_build_generate_config(gen_config, system_prompt),
     )
     async for chunk in stream:
         # Extract text from all candidates/parts to avoid dropping content
@@ -103,6 +93,24 @@ async def call_stream(
             yield chunk.text
 
 
+_THINKING_BUDGETS = {"low": 1024, "medium": 4096, "high": -1}
+
+
+def _build_generate_config(gen_config: dict, system_prompt: str) -> types.GenerateContentConfig:
+    """Build the full GenerateContentConfig including thinking support."""
+    kwargs = {
+        "system_instruction": system_prompt,
+        "temperature": gen_config["temperature"],
+        "top_p": gen_config.get("top_p"),
+        "max_output_tokens": gen_config["max_output_tokens"],
+    }
+    thinking_level = gen_config.get("thinking_level")
+    if thinking_level:
+        budget = _THINKING_BUDGETS.get(thinking_level, 0)
+        kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=budget)
+    return types.GenerateContentConfig(**kwargs)
+
+
 def _build_gen_config(config: ModelConfig) -> dict:
     """Build generation config dict from ModelConfig."""
     gc = {
@@ -111,4 +119,6 @@ def _build_gen_config(config: ModelConfig) -> dict:
     }
     if config.top_p is not None:
         gc["top_p"] = config.top_p
+    if config.thinking_level is not None:
+        gc["thinking_level"] = config.thinking_level
     return gc

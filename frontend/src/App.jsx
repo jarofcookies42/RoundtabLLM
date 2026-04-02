@@ -1,5 +1,5 @@
 /**
- * LLM Roundtable — Main App Shell
+ * RoundtabLLM — Main App Shell
  *
  * State lives here and flows down to children:
  *   - messages[]         current conversation messages
@@ -33,7 +33,7 @@ export const MODEL_META = {
   claude: { name: "Claude", color: "#D97706", accent: "#FBBF24", icon: "◈" },
   gpt:    { name: "GPT-5.4", color: "#10B981", accent: "#6EE7B7", icon: "◉" },
   gemini: { name: "Gemini 3.1 Pro", color: "#6366F1", accent: "#A5B4FC", icon: "◆" },
-  grok:    { name: "Grok", color: "#EC4899", accent: "#F9A8D4", icon: "✕" },
+  grok:    { name: "Grok 4.20", color: "#EC4899", accent: "#F9A8D4", icon: "✕" },
 };
 
 export default function App() {
@@ -169,7 +169,7 @@ export default function App() {
         display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16,
       }}>
         <span style={{ fontSize: 32, color: "#D97706" }}>⬡</span>
-        <div style={{ fontFamily: "'Sora', sans-serif", fontWeight: 800, fontSize: 18 }}>LLM Roundtable</div>
+        <div style={{ fontFamily: "'Sora', sans-serif", fontWeight: 800, fontSize: 18 }}>RoundtabLLM</div>
         <form onSubmit={(e) => {
           e.preventDefault();
           if (tokenInput.trim()) {
@@ -248,7 +248,7 @@ export default function App() {
         )}
         <div style={{ marginRight: "auto" }}>
           <div style={{ fontFamily: "'Sora', sans-serif", fontWeight: 800, fontSize: 15, color: "#FAFAFA" }}>
-            LLM Roundtable
+            RoundtabLLM
           </div>
           <div style={{ fontSize: 10, color: "#52525B" }}>
             {activeOrder.length} model{activeOrder.length !== 1 ? "s" : ""} · {MODEL_META[anchorModel]?.name} anchors
