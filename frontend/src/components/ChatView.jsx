@@ -20,7 +20,7 @@ const ALLOWED_TEXT_EXTS = [".md", ".txt", ".py", ".json", ".js", ".ts", ".jsx", 
 const MAX_TEXT_SIZE = 100 * 1024; // 100KB
 const MAX_PDF_SIZE = 1 * 1024 * 1024; // 1MB
 
-export default function ChatView({ messages, activeModel, anchorModel, sending, onSend, inputRef, enabledModels }) {
+export default function ChatView({ messages, activeModel, anchorModel, sending, onSend, inputRef, enabledModels, contextTokens, contextLimit, compactionNotice }) {
   const chatEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const [attachedFile, setAttachedFile] = useState(null); // { name, content }
@@ -193,6 +193,31 @@ export default function ChatView({ messages, activeModel, anchorModel, sending, 
           <span style={{ fontSize: 10, color: "#52525B" }}>
             {(attachedFile.content.length / 1024).toFixed(1)}KB
           </span>
+        </div>
+      )}
+
+      {/* Context pressure + compaction notice */}
+      {(contextTokens > 0 || compactionNotice) && (
+        <div style={{ padding: "4px 20px", background: "#0C0C0F", borderTop: "1px solid #141418", display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+          {contextTokens > 0 && (() => {
+            const pct = contextTokens / (contextLimit || 30000);
+            const color = pct > 0.9 ? "#EF4444" : pct > 0.7 ? "#D97706" : "#10B981";
+            return (
+              <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1 }}>
+                <div style={{ flex: 1, maxWidth: 120, height: 3, borderRadius: 2, background: "#1E1E22", overflow: "hidden" }}>
+                  <div style={{ height: "100%", width: `${Math.min(100, pct * 100)}%`, background: color, borderRadius: 2, transition: "width 0.3s" }} />
+                </div>
+                <span style={{ fontSize: 9, color: "#3F3F46", whiteSpace: "nowrap" }}>
+                  {Math.round(contextTokens / 1000)}K / {Math.round((contextLimit || 30000) / 1000)}K tokens
+                </span>
+              </div>
+            );
+          })()}
+          {compactionNotice && (
+            <span style={{ fontSize: 10, color: "#6366F1", fontWeight: 600, marginLeft: "auto" }}>
+              {compactionNotice}
+            </span>
+          )}
         </div>
       )}
 

@@ -56,6 +56,16 @@ export default function MessageBubble({ msg, isAnchor }) {
               anchor
             </span>
           )}
+          {!isUser && msg.trust_tier && msg.trust_tier !== "model" && msg.trust_tier !== "direct" && (
+            <span style={{
+              fontSize: 9, padding: "2px 8px", borderRadius: 10,
+              background: msg.trust_tier === "derived" ? "#06B6D415" : msg.trust_tier === "imported" ? "#8B5CF615" : "#52525B15",
+              color: msg.trust_tier === "derived" ? "#67E8F9" : msg.trust_tier === "imported" ? "#A78BFA" : "#71717A",
+              fontWeight: 500, letterSpacing: "0.06em", textTransform: "uppercase",
+            }}>
+              {msg.trust_tier}
+            </span>
+          )}
           {msg._streaming && (
             <span style={{
               fontSize: 9, padding: "2px 8px", borderRadius: 10,

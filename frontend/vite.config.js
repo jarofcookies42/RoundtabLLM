@@ -9,6 +9,7 @@ export default defineConfig({
       '/chat': 'http://localhost:8000',
       '/conversations': 'http://localhost:8000',
       '/context': 'http://localhost:8000',
+      '/memory': 'http://localhost:8000',
       '/import': 'http://localhost:8000',
     },
   },

@@ -16,7 +16,7 @@ const MODE_LABELS = {
     claude: "Opus 4.6",
     gpt: "high reasoning",
     gemini: "Deep Think",
-    grok: "multi-agent",
+    grok: "reasoning",
   },
 };
 

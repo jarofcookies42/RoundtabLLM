@@ -129,7 +129,7 @@ OVERDRIVE_MODELS = {
         top_p=0.95,
     ),
     "grok": ModelConfig(
-        model_id="grok-4.20-multi-agent",
+        model_id="grok-4.20-reasoning",
         provider="grok",
         display_name="Grok 4.20",
         color="#EC4899",

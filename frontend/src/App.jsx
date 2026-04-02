@@ -5,9 +5,11 @@
  *   - messages[]         current conversation messages
  *   - mode               "regular" | "overdrive"
  *   - anchor             "knowledge" | "abstract"
+ *   - contextMode        "full" | "select" | "none"
+ *   - selectedTopics[]   topic keys for select mode
  *   - enabledModels[]    which model keys are active
  *   - activeModel        which model is currently generating (null when idle)
- *   - tab                "chat" | "context" | "settings"
+ *   - tab                "chat" | "context"
  *   - conversationId     current conversation DB id
  *
  * Theme: dark background (#08080B), monospace chat, Sora headings.
@@ -19,6 +21,7 @@ import ModeToggle from "./components/ModeToggle";
 import AnchorToggle from "./components/AnchorToggle";
 import ModelChips from "./components/ModelChips";
 import ProtocolToggle from "./components/ProtocolToggle";
+import ContextModeToggle from "./components/ContextModeToggle";
 import ContextEditor from "./components/ContextEditor";
 import useSSE from "./hooks/useSSE";
 import { sendMessage, exportConversation } from "./api";
@@ -33,11 +36,10 @@ export const MODEL_META = {
   claude: { name: "Claude", color: "#D97706", accent: "#FBBF24", icon: "◈" },
   gpt:    { name: "GPT-5.4", color: "#10B981", accent: "#6EE7B7", icon: "◉" },
   gemini: { name: "Gemini 3.1 Pro", color: "#6366F1", accent: "#A5B4FC", icon: "◆" },
-  grok:    { name: "Grok 4.20", color: "#EC4899", accent: "#F9A8D4", icon: "✕" },
+  grok:   { name: "Grok 4.20", color: "#EC4899", accent: "#F9A8D4", icon: "✕" },
 };
 
 export default function App() {
-  // --- All hooks must be called unconditionally (Rules of Hooks) ---
   const [authed, setAuthed] = useState(!!localStorage.getItem("roundtable_token"));
   const [tokenInput, setTokenInput] = useState("");
   const [messages, setMessages] = useState([]);
@@ -47,7 +49,13 @@ export default function App() {
   const [activeModel, setActiveModel] = useState(null);
   const [sending, setSending] = useState(false);
   const [protocol, setProtocol] = useState("roundtable");
-  const [debateRoles, setDebateRoles] = useState({}); // {model_key: "proposer"|"critic"|"synthesizer"}
+  const [debateRoles, setDebateRoles] = useState({});
+  const [contextMode, setContextMode] = useState("full");
+  const [selectedTopics, setSelectedTopics] = useState([]);
+  const [loadedTopics, setLoadedTopics] = useState([]);
+  const [contextTokens, setContextTokens] = useState(0);
+  const [contextLimit, setContextLimit] = useState(30000);
+  const [compactionNotice, setCompactionNotice] = useState(null);
   const [tab, setTab] = useState("chat");
   const [conversationId, setConversationId] = useState(null);
   const inputRef = useRef(null);
@@ -61,21 +69,20 @@ export default function App() {
           return [...prev.slice(0, -1), { ...last, content: last.content + delta }];
         }
         return [...prev, {
-          role: "assistant",
-          model,
+          role: "assistant", model,
           name: MODEL_META[model]?.name || model,
-          content: delta,
-          _streaming: true,
+          content: delta, _streaming: true,
           id: Date.now() + Math.random(),
         }];
       });
     },
     onModelDone: (model, content, protocolRole) => {
       setActiveModel(null);
+      const trust_tier = protocolRole === "synthesis" ? "derived" : "model";
       setMessages(prev =>
         prev.map(m =>
           m.model === model && m._streaming
-            ? { ...m, content, _streaming: false, protocolRole }
+            ? { ...m, content, _streaming: false, protocolRole, trust_tier }
             : m
         )
       );
@@ -83,17 +90,23 @@ export default function App() {
     onModelError: (model, error) => {
       setActiveModel(null);
       setMessages(prev => [...prev, {
-        role: "assistant",
-        model,
+        role: "assistant", model,
         name: MODEL_META[model]?.name || model,
-        content: `⚠ ${error}`,
-        isError: true,
+        content: `⚠ ${error}`, isError: true,
+        trust_tier: "system",
         id: Date.now() + Math.random(),
       }]);
     },
-    onRoundDone: () => {
+    onContextLoaded: (topics) => setLoadedTopics(topics || []),
+    onCompaction: (data) => {
+      setCompactionNotice(`Compacted ${data.messages_compacted} older messages`);
+      setTimeout(() => setCompactionNotice(null), 5000);
+    },
+    onRoundDone: (ctxTokens, ctxLimit) => {
       setSending(false);
       setActiveModel(null);
+      if (ctxTokens) setContextTokens(ctxTokens);
+      if (ctxLimit) setContextLimit(ctxLimit);
       setTimeout(() => inputRef.current?.focus(), 100);
     },
   });
@@ -105,7 +118,7 @@ export default function App() {
   const activeOrder = anchorOrder.filter(k => enabledModels.includes(k));
   const anchorModel = activeOrder[activeOrder.length - 1];
 
-  // --- Default debate role assignment (position-based) ---
+  // --- Default debate role assignment ---
   const getDefaultDebateRoles = (order) => {
     if (order.length < 3) return {};
     const roles = {};
@@ -132,6 +145,7 @@ export default function App() {
   const handleSend = useCallback(async (text) => {
     if (!text.trim() || sending) return;
     setSending(true);
+    setLoadedTopics([]);
 
     const userMsg = {
       role: "user", model: "user", name: "Jack",
@@ -143,24 +157,26 @@ export default function App() {
       const res = await sendMessage({
         message: text.trim(),
         conversation_id: conversationId,
-        mode,
-        anchor,
-        protocol,
+        mode, anchor, protocol,
         enabled_models: enabledModels,
         debate_roles: protocol === "debate" ? effectiveDebateRoles : undefined,
+        context_mode: contextMode,
+        selected_topics: contextMode === "select" ? selectedTopics : undefined,
       });
       setConversationId(res.conversation_id);
       startStream(res.conversation_id, {
         mode, anchor, protocol, enabled_models: enabledModels,
         debate_roles: protocol === "debate" ? effectiveDebateRoles : undefined,
+        context_mode: contextMode,
+        selected_topics: contextMode === "select" ? selectedTopics : undefined,
       });
     } catch (err) {
       setSending(false);
       console.error("Send failed:", err);
     }
-  }, [sending, conversationId, mode, anchor, protocol, enabledModels, effectiveDebateRoles, startStream]);
+  }, [sending, conversationId, mode, anchor, protocol, enabledModels, effectiveDebateRoles, contextMode, selectedTopics, startStream]);
 
-  // --- Auth gate (rendered conditionally, but hooks are all above) ---
+  // --- Auth gate ---
   if (!authed) {
     return (
       <div style={{
@@ -177,34 +193,23 @@ export default function App() {
             setAuthed(true);
           }
         }} style={{ display: "flex", gap: 8 }}>
-          <input
-            type="password"
-            placeholder="Auth token"
-            value={tokenInput}
-            onChange={e => setTokenInput(e.target.value)}
-            autoFocus
-            style={{
-              padding: "8px 14px", background: "#18181B", border: "1px solid #27272A",
-              borderRadius: 8, color: "#E4E4E7", fontFamily: "inherit", fontSize: 13, width: 240,
-            }}
-          />
-          <button type="submit" style={{
-            padding: "8px 16px", background: "#D97706", color: "#000", border: "none",
-            borderRadius: 8, fontFamily: "inherit", fontSize: 13, fontWeight: 600, cursor: "pointer",
-          }}>Enter</button>
+          <input type="password" placeholder="Auth token" value={tokenInput}
+            onChange={e => setTokenInput(e.target.value)} autoFocus
+            style={{ padding: "8px 14px", background: "#18181B", border: "1px solid #27272A",
+              borderRadius: 8, color: "#E4E4E7", fontFamily: "inherit", fontSize: 13, width: 240 }} />
+          <button type="submit" style={{ padding: "8px 16px", background: "#D97706", color: "#000",
+            border: "none", borderRadius: 8, fontFamily: "inherit", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Enter</button>
         </form>
       </div>
     );
   }
 
-  // --- Render ---
   return (
     <div style={{
       height: "100vh", background: "#08080B", color: "#E4E4E7",
       fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
       display: "flex", flexDirection: "column", overflow: "hidden",
     }}>
-      {/* Global styles */}
       <style>{`
         * { box-sizing: border-box; margin: 0; padding: 0; }
         ::-webkit-scrollbar { width: 5px; }
@@ -223,25 +228,19 @@ export default function App() {
       }}>
         <span style={{ fontSize: 20, color: "#D97706" }}>⬡</span>
         <button
-          onClick={() => { setMessages([]); setConversationId(null); setSending(false); setActiveModel(null); }}
+          onClick={() => { setMessages([]); setConversationId(null); setSending(false); setActiveModel(null); setLoadedTopics([]); setContextTokens(0); setCompactionNotice(null); }}
           title="New chat"
-          style={{
-            background: "transparent", border: "1px solid #27272A", borderRadius: 6,
+          style={{ background: "transparent", border: "1px solid #27272A", borderRadius: 6,
             color: "#71717A", cursor: "pointer", padding: "4px 8px", fontSize: 13,
-            fontFamily: "inherit", lineHeight: 1, transition: "all 0.2s",
-          }}
+            fontFamily: "inherit", lineHeight: 1, transition: "all 0.2s" }}
           onMouseEnter={e => { e.target.style.borderColor = "#D97706"; e.target.style.color = "#D97706"; }}
           onMouseLeave={e => { e.target.style.borderColor = "#27272A"; e.target.style.color = "#71717A"; }}
         >+</button>
         {conversationId && (
-          <button
-            onClick={() => exportConversation(conversationId)}
-            title="Export as markdown"
-            style={{
-              background: "transparent", border: "1px solid #27272A", borderRadius: 6,
+          <button onClick={() => exportConversation(conversationId)} title="Export as markdown"
+            style={{ background: "transparent", border: "1px solid #27272A", borderRadius: 6,
               color: "#71717A", cursor: "pointer", padding: "4px 8px", fontSize: 11,
-              fontFamily: "inherit", lineHeight: 1, transition: "all 0.2s",
-            }}
+              fontFamily: "inherit", lineHeight: 1, transition: "all 0.2s" }}
             onMouseEnter={e => { e.target.style.borderColor = "#D97706"; e.target.style.color = "#D97706"; }}
             onMouseLeave={e => { e.target.style.borderColor = "#27272A"; e.target.style.color = "#71717A"; }}
           >Export</button>
@@ -252,8 +251,10 @@ export default function App() {
           </div>
           <div style={{ fontSize: 10, color: "#52525B" }}>
             {activeOrder.length} model{activeOrder.length !== 1 ? "s" : ""} · {MODEL_META[anchorModel]?.name} anchors
+            {loadedTopics.length > 0 && ` · ctx: ${loadedTopics.join(", ")}`}
           </div>
         </div>
+        <ContextModeToggle contextMode={contextMode} onChange={setContextMode} />
         <ProtocolToggle protocol={protocol} onChange={setProtocol} />
         <ModeToggle mode={mode} onChange={setMode} />
         <AnchorToggle anchor={anchor} onChange={setAnchor} />
@@ -267,34 +268,24 @@ export default function App() {
       }}>
         <ModelChips
           enabledModels={enabledModels}
-          onToggle={(key) => {
-            setEnabledModels(prev =>
-              prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
-            );
-          }}
+          onToggle={(key) => setEnabledModels(prev =>
+            prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
+          )}
           mode={mode}
           protocol={protocol}
           debateRoles={effectiveDebateRoles}
           onRoleChange={(key, newRole) => {
             setDebateRoles(prev => {
               const next = { ...effectiveDebateRoles, [key]: newRole };
-              // Enforce constraints: exactly 2 proposers, 1 critic, 1 synthesizer
-              // If we now have too many of newRole, steal from another model
               const models = activeOrder.filter(k => k !== key);
               const counts = { proposer: 0, critic: 0, synthesizer: 0 };
-              counts[newRole] = 1; // the one we just set
-              for (const k of models) {
-                if (next[k]) counts[next[k]]++;
-              }
-              // Target: 2 proposers, 1 critic, 1 synthesizer (for 4 models)
-              // For 3 models: 1 proposer, 1 critic, 1 synthesizer
+              counts[newRole] = 1;
+              for (const k of models) { if (next[k]) counts[next[k]]++; }
               const targetProposers = activeOrder.length >= 4 ? 2 : 1;
               const target = { proposer: targetProposers, critic: 1, synthesizer: 1 };
-              // Find which role is over and which is under
               const over = Object.keys(counts).find(r => counts[r] > target[r]);
               const under = Object.keys(counts).find(r => counts[r] < target[r]);
               if (over && under) {
-                // Find a model (not the one we just changed) with the over role and reassign
                 const victim = models.find(k => next[k] === over);
                 if (victim) next[victim] = under;
               }
@@ -307,9 +298,7 @@ export default function App() {
       {/* Tabs */}
       <div style={{ display: "flex", borderBottom: "1px solid #141418", background: "#0C0C0F", flexShrink: 0 }}>
         {TABS.map(t => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
+          <button key={t.id} onClick={() => setTab(t.id)}
             style={{
               padding: "8px 18px", border: "none", background: "transparent",
               color: tab === t.id ? "#D97706" : "#52525B",
@@ -317,26 +306,24 @@ export default function App() {
               letterSpacing: "0.08em", textTransform: "uppercase",
               borderBottom: tab === t.id ? "2px solid #D97706" : "2px solid transparent",
             }}
-          >
-            {t.label}
-          </button>
+          >{t.label}</button>
         ))}
       </div>
 
       {/* Main content */}
       <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
         {tab === "chat" && (
-          <ChatView
-            messages={messages}
-            activeModel={activeModel}
-            anchorModel={anchorModel}
-            sending={sending}
-            onSend={handleSend}
-            inputRef={inputRef}
-            enabledModels={enabledModels}
+          <ChatView messages={messages} activeModel={activeModel} anchorModel={anchorModel}
+            sending={sending} onSend={handleSend} inputRef={inputRef} enabledModels={enabledModels}
+            contextTokens={contextTokens} contextLimit={contextLimit} compactionNotice={compactionNotice} />
+        )}
+        {tab === "context" && (
+          <ContextEditor
+            contextMode={contextMode}
+            selectedTopics={selectedTopics}
+            onSelectedTopicsChange={setSelectedTopics}
           />
         )}
-        {tab === "context" && <ContextEditor />}
       </div>
     </div>
   );

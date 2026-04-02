@@ -5,10 +5,8 @@ KEY CONSTRAINTS:
 - Uses OpenAI SDK with custom base_url: https://api.x.ai/v1
 - Temperature is a free parameter (0.0–2.0). Only model where it matters.
 - Regular: grok-4.20-non-reasoning (t=0.7) — standard fast inference.
-- Overdrive: grok-4.20-multi-agent (t=0.9) — 4 specialized internal agents
-  (coordinator, researcher, logic/math, creative/contrarian) collaborate per query.
-  Similar per-token pricing ($2/$6 per M input/output) but higher actual token
-  consumption due to internal agent collaboration.
+- Overdrive: grok-4.20-reasoning (t=0.9) — internal chain-of-thought reasoning.
+  Reasoning tokens are hidden by the Chat Completions API (billed but not visible).
 - Reasoning tokens are NOT exposed via Chat Completions API.
 """
 import openai

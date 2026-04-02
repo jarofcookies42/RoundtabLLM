@@ -2,19 +2,20 @@
  * useSSE — Server-Sent Events hook for streaming model responses.
  *
  * SSE event format from backend:
+ *   data: {"type": "compaction", "messages_compacted": N, "summary_tokens": T}
+ *   data: {"type": "context_loaded", "topics": ["thesis", "projects"]}
  *   data: {"type": "model_start", "model": "claude", "name": "Claude Sonnet 4.6"}
  *   data: {"type": "token", "model": "claude", "delta": "Hello"}
  *   data: {"type": "model_done", "model": "claude", "content": "full response"}
  *   data: {"type": "model_error", "model": "claude", "error": "timeout"}
- *   data: {"type": "round_done"}
+ *   data: {"type": "round_done", "context_tokens": N, "context_limit": 30000}
  */
 import { useRef, useCallback } from "react";
 
-export default function useSSE({ onModelStart, onToken, onModelDone, onModelError, onRoundDone }) {
+export default function useSSE({ onModelStart, onToken, onModelDone, onModelError, onContextLoaded, onCompaction, onRoundDone }) {
   const sourceRef = useRef(null);
 
-  const startStream = useCallback((conversationId, { mode, anchor, protocol, enabled_models, debate_roles }) => {
-    // Close any existing stream
+  const startStream = useCallback((conversationId, { mode, anchor, protocol, enabled_models, debate_roles, context_mode, selected_topics }) => {
     if (sourceRef.current) {
       sourceRef.current.close();
     }
@@ -25,10 +26,14 @@ export default function useSSE({ onModelStart, onToken, onModelDone, onModelErro
       anchor,
       protocol: protocol || "roundtable",
       enabled_models: enabled_models.join(","),
+      context_mode: context_mode || "full",
       token,
     });
     if (debate_roles) {
       params.set("debate_roles", JSON.stringify(debate_roles));
+    }
+    if (selected_topics && selected_topics.length > 0) {
+      params.set("selected_topics", JSON.stringify(selected_topics));
     }
 
     const url = `/chat/stream/${conversationId}?${params}`;
@@ -40,6 +45,12 @@ export default function useSSE({ onModelStart, onToken, onModelDone, onModelErro
         const data = JSON.parse(event.data);
 
         switch (data.type) {
+          case "compaction":
+            onCompaction?.(data);
+            break;
+          case "context_loaded":
+            onContextLoaded?.(data.topics);
+            break;
           case "model_start":
             onModelStart?.(data.model, data.name, data.protocol_role);
             break;
@@ -53,7 +64,7 @@ export default function useSSE({ onModelStart, onToken, onModelDone, onModelErro
             onModelError?.(data.model, data.error);
             break;
           case "round_done":
-            onRoundDone?.();
+            onRoundDone?.(data.context_tokens, data.context_limit);
             source.close();
             sourceRef.current = null;
             break;
@@ -68,7 +79,7 @@ export default function useSSE({ onModelStart, onToken, onModelDone, onModelErro
       sourceRef.current = null;
       onRoundDone?.();
     };
-  }, [onModelStart, onToken, onModelDone, onModelError, onRoundDone]);
+  }, [onModelStart, onToken, onModelDone, onModelError, onContextLoaded, onCompaction, onRoundDone]);
 
   return { startStream };
 }

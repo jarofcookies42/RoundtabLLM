@@ -1,11 +1,21 @@
 """
-Context engine — assembles system prompts with shared memory context.
+Context engine — assembles system prompts with memory-as-hint context.
 
 The system prompt structure for every model:
 1. Group chat behavior instructions
-2. Shared context document (Jack's background, projects, preferences)
-3. Current mode indicator
+2. Memory index (always, unless context_mode is "none")
+3. Loaded topic files (relevance-detected, user-selected, or none)
+4. Current mode indicator
+5. Protocol role prompt (if applicable)
 """
+import json
+import logging
+from sqlmodel import select
+
+from ..models import ContextDoc, MemoryFile
+from ..memory.relevance import detect_relevant_topics
+
+logger = logging.getLogger("roundtable.context")
 
 
 GROUP_CHAT_INSTRUCTIONS = """You are in a multi-AI roundtable group chat with a human user named Jack and other AI assistants. The conversation flows round-robin — each AI responds in turn, and everyone can see all previous messages including other AIs' responses.
@@ -35,6 +45,58 @@ PROTOCOL_PROMPTS = {
 }
 
 
+def get_relevant_context(
+    message: str,
+    recent_messages: list[str],
+    context_mode: str,
+    selected_topics: list[str] | None,
+    session,
+) -> tuple[str, list[str]]:
+    """
+    Resolve which memory topics to load based on context mode.
+
+    Returns (assembled_context_string, list_of_loaded_topic_keys).
+    """
+    if context_mode == "none":
+        return "", []
+
+    # Load memory index
+    index_file = session.exec(
+        select(MemoryFile).where(MemoryFile.key == "index")
+    ).first()
+
+    if not index_file:
+        # Fallback: no memory files seeded yet, use legacy monolithic context
+        logger.info("No memory files found, falling back to legacy context")
+        return get_current_context(session), []
+
+    # Determine which topics to load
+    if context_mode == "select" and selected_topics:
+        topic_keys = selected_topics
+    else:
+        # "full" mode: relevance detection
+        topic_keys = detect_relevant_topics(message, recent_messages, index_file.content)
+
+    # Load topic files from DB
+    loaded_topics: list[tuple[str, str]] = []
+    for key in topic_keys:
+        topic = session.exec(
+            select(MemoryFile).where(MemoryFile.key == key)
+        ).first()
+        if topic:
+            loaded_topics.append((key, topic.content))
+
+    logger.info("Context mode=%s, loaded topics: %s", context_mode, [k for k, _ in loaded_topics])
+
+    # Assemble context string with section markers
+    parts = [f"# Memory Index\n{index_file.content}"]
+    for key, content in loaded_topics:
+        parts.append(f"# Loaded Context: {key}\n{content}")
+
+    assembled = "\n\n".join(parts)
+    return assembled, [k for k, _ in loaded_topics]
+
+
 def build_system_prompt(
     context_content: str,
     mode: str,
@@ -46,7 +108,7 @@ def build_system_prompt(
     Build the full system prompt for a model.
 
     Args:
-        context_content: The shared context document (markdown)
+        context_content: Assembled context (from get_relevant_context or legacy)
         mode: "regular" or "overdrive"
         model_name: Display name of this model (e.g. "Claude Sonnet 4.6")
         protocol: "roundtable", "blind", or "debate"
@@ -59,12 +121,18 @@ def build_system_prompt(
 
     mode_label = "Regular" if mode == "regular" else "⚡ MAXIMUM OVERDRIVE ⚡"
 
-    prompt = f"""{instructions}
+    if context_content:
+        prompt = f"""{instructions}
 
 ---
 # About Jack (shared context)
 {context_content}
 ---
+
+Current mode: {mode_label}"""
+    else:
+        # No context mode — just instructions + mode
+        prompt = f"""{instructions}
 
 Current mode: {mode_label}"""
 
@@ -75,10 +143,7 @@ Current mode: {mode_label}"""
 
 
 def get_current_context(session) -> str:
-    """Load the most recent context document from DB."""
-    from ..models import ContextDoc
-    from sqlmodel import select
-
+    """Load the most recent context document from DB (legacy monolithic)."""
     result = session.exec(
         select(ContextDoc).order_by(ContextDoc.id.desc())  # type: ignore
     ).first()
@@ -88,8 +153,6 @@ def get_current_context(session) -> str:
 
 def update_context(session, content: str, source: str = "manual") -> None:
     """Save a new version of the context document."""
-    from ..models import ContextDoc
-    
     doc = ContextDoc(content=content, source=source)
     session.add(doc)
     session.commit()
