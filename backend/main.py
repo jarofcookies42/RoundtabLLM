@@ -269,6 +269,12 @@ async def stream_chat(
         except Exception:
             pass
 
+    if not session_config and conv.config:
+        try:
+            session_config = SessionConfig.model_validate_json(conv.config)
+        except Exception:
+            pass
+
     if not session_config:
         model_list = [m.strip() for m in enabled_models.split(",")]
         session_config = SessionConfig(
