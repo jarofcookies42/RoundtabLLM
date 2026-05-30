@@ -12,7 +12,7 @@ The result: richer, more nuanced answers than any single model produces alone.
 
 | Slot | Regular Mode | Overdrive Mode |
 |------|-------------|----------------|
-| Claude | Sonnet 4.6 (thinking: enabled) | Opus 4.6 (thinking: adaptive) |
+| Claude | Sonnet 4.6 (thinking: enabled) | Opus 4.7 (thinking: adaptive) |
 | GPT | 5.4 (no reasoning) | 5.4 (high reasoning) |
 | Gemini | 3.1 Pro (low think) | 3.1 Pro (Deep Think Mini) |
 | Grok | 4.20 non-reasoning | 4.20 reasoning |
@@ -98,4 +98,4 @@ See [CLAUDE.md](CLAUDE.md) for detailed technical documentation — API details,
 
 ## Built With
 
-Built entirely by [Claude Code](https://claude.ai). Powered by Claude Sonnet/Opus 4.6, GPT-5.4, Gemini 3.1 Pro, and Grok 4.20.
+Built entirely by [Claude Code](https://claude.ai). Powered by Claude Sonnet/Opus 4.7, GPT-5.4, Gemini 3.1 Pro, and Grok 4.20.
