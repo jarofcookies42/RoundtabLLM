@@ -34,12 +34,11 @@ const TABS = [
   { id: "context", label: "Memory / Context" },
 ];
 
-// Model metadata (display only — actual configs live on the backend)
 export const MODEL_META = {
   claude: { name: "Claude", color: "#D97706", accent: "#FBBF24", icon: "◈" },
-  gpt:    { name: "GPT-5.4", color: "#10B981", accent: "#6EE7B7", icon: "◉" },
-  gemini: { name: "Gemini 3.1 Pro", color: "#6366F1", accent: "#A5B4FC", icon: "◆" },
-  grok:   { name: "Grok 4.20", color: "#EC4899", accent: "#F9A8D4", icon: "✕" },
+  gpt:    { name: "GPT", color: "#10B981", accent: "#6EE7B7", icon: "◉" },
+  gemini: { name: "Gemini", color: "#6366F1", accent: "#A5B4FC", icon: "◆" },
+  grok:   { name: "Grok", color: "#EC4899", accent: "#F9A8D4", icon: "✕" },
   ollama: { name: "Ollama", color: "#8B5CF6", accent: "#C084FC", icon: "🖳" },
 };
 

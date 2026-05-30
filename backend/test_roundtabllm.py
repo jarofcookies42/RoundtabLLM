@@ -243,9 +243,9 @@ class TestRoundtabLLM(unittest.TestCase):
 
         # 2. Opus model with adaptive thinking and effort
         cfg_overdrive = ModelConfig(
-            model_id="claude-opus-4-7",
+            model_id="claude-opus-4-8",
             provider="anthropic",
-            display_name="Claude Opus 4.7",
+            display_name="Claude Opus 4.8",
             color="#D97706",
             icon="◈",
             thinking={"type": "adaptive"},
@@ -257,9 +257,9 @@ class TestRoundtabLLM(unittest.TestCase):
 
         # 3. Coercion: Opus model but overrides specify type: "enabled" with budget_tokens
         cfg_coerced = ModelConfig(
-            model_id="claude-opus-4-7",
+            model_id="claude-opus-4-8",
             provider="anthropic",
-            display_name="Claude Opus 4.7",
+            display_name="Claude Opus 4.8",
             color="#D97706",
             icon="◈",
             thinking={"type": "enabled", "budget_tokens": 8192},

@@ -13,8 +13,8 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 GOOGLE_AI_API_KEY = os.getenv("GOOGLE_AI_API_KEY", "")
 GROK_API_KEY = os.getenv("GROK_API_KEY", "")
-GROK_MODEL_ID = os.getenv("GROK_MODEL_ID", "grok-4.20-non-reasoning")
-GROK_OVERDRIVE_MODEL_ID = os.getenv("GROK_OVERDRIVE_MODEL_ID", "grok-4.20-reasoning")
+GROK_MODEL_ID = os.getenv("GROK_MODEL_ID", "grok-4.3")
+GROK_OVERDRIVE_MODEL_ID = os.getenv("GROK_OVERDRIVE_MODEL_ID", "grok-4.3")
 AUTH_TOKEN = os.getenv("AUTH_TOKEN", "changeme")
 
 # --- Database ---
@@ -69,9 +69,9 @@ REGULAR_MODELS = {
         thinking={"type": "enabled", "budget_tokens": 4096},
     ),
     "gpt": ModelConfig(
-        model_id=os.getenv("GPT_MODEL_ID", "gpt-5.4"),
+        model_id=os.getenv("GPT_MODEL_ID", "gpt-5.5-instant"),
         provider="openai",
-        display_name="GPT-5.4",
+        display_name="GPT-5.5 Instant",
         color="#10B981",
         icon="◉",
         # temperature=1 is the ONLY valid value, but for GPT-5 reasoning models
@@ -81,9 +81,9 @@ REGULAR_MODELS = {
         verbosity="medium",
     ),
     "gemini": ModelConfig(
-        model_id=os.getenv("GEMINI_MODEL_ID", "gemini-3.1-pro-preview"),
+        model_id=os.getenv("GEMINI_MODEL_ID", "gemini-3.5-flash"),
         provider="gemini",
-        display_name="Gemini 3.1 Pro",
+        display_name="Gemini 3.5 Flash",
         color="#6366F1",
         icon="◆",
         temperature=1.0,  # MUST be 1.0, do not change
@@ -94,7 +94,7 @@ REGULAR_MODELS = {
     "grok": ModelConfig(
         model_id=GROK_MODEL_ID,
         provider="grok",
-        display_name="Grok 4.20",
+        display_name="Grok 4.3",
         color="#EC4899",
         icon="✕",
         temperature=0.7,
@@ -113,9 +113,9 @@ REGULAR_MODELS = {
 
 OVERDRIVE_MODELS = {
     "claude": ModelConfig(
-        model_id=os.getenv("CLAUDE_OVERDRIVE_MODEL_ID", "claude-opus-4-7"),
+        model_id=os.getenv("CLAUDE_OVERDRIVE_MODEL_ID", "claude-opus-4-8"),
         provider="anthropic",
-        display_name="Claude Opus 4.7",
+        display_name="Claude Opus 4.8",
         color="#D97706",
         icon="◈",
         max_tokens=32000,
@@ -123,9 +123,9 @@ OVERDRIVE_MODELS = {
         effort="max",
     ),
     "gpt": ModelConfig(
-        model_id=os.getenv("GPT_OVERDRIVE_MODEL_ID", "gpt-5.4"),
+        model_id=os.getenv("GPT_OVERDRIVE_MODEL_ID", "gpt-5.5"),
         provider="openai",
-        display_name="GPT-5.4",
+        display_name="GPT-5.5",
         color="#10B981",
         icon="◉",
         max_tokens=2048,
@@ -146,7 +146,7 @@ OVERDRIVE_MODELS = {
     "grok": ModelConfig(
         model_id=GROK_OVERDRIVE_MODEL_ID,
         provider="grok",
-        display_name="Grok 4.20",
+        display_name="Grok 4.3",
         color="#EC4899",
         icon="✕",
         temperature=0.9,
