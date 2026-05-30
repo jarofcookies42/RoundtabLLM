@@ -14,3 +14,6 @@ backend/static/
 export-distillation-companion.md
 llm-roundtable-backend-plan.md
 context/jack_context.md
+*.db-shm
+*.db-wal
+

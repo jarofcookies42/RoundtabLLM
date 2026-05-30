@@ -13,12 +13,18 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 GOOGLE_AI_API_KEY = os.getenv("GOOGLE_AI_API_KEY", "")
 GROK_API_KEY = os.getenv("GROK_API_KEY", "")
+GROK_MODEL_ID = os.getenv("GROK_MODEL_ID", "grok-4.20-non-reasoning")
+GROK_OVERDRIVE_MODEL_ID = os.getenv("GROK_OVERDRIVE_MODEL_ID", "grok-4.20-reasoning")
 AUTH_TOKEN = os.getenv("AUTH_TOKEN", "changeme")
 
 # --- Database ---
 # Use /data/roundtable.db on Railway (persistent volume), local file otherwise
 _default_db = "sqlite:////data/roundtable.db" if os.path.isdir("/data") else "sqlite:///./roundtable.db"
 DATABASE_URL = os.getenv("DATABASE_URL", _default_db)
+
+# --- Background Models ---
+COMPACTION_MODEL_KEY = os.getenv("COMPACTION_MODEL_KEY", "claude")
+AUTODREAM_MODEL_KEY = os.getenv("AUTODREAM_MODEL_KEY", "claude")
 
 # --- Model Definitions ---
 
@@ -53,7 +59,7 @@ class ModelConfig:
 
 REGULAR_MODELS = {
     "claude": ModelConfig(
-        model_id="claude-sonnet-4-6",
+        model_id=os.getenv("CLAUDE_MODEL_ID", "claude-sonnet-4-6"),
         provider="anthropic",
         display_name="Claude Sonnet 4.6",
         color="#D97706",
@@ -63,7 +69,7 @@ REGULAR_MODELS = {
         thinking={"type": "enabled", "budget_tokens": 4096},
     ),
     "gpt": ModelConfig(
-        model_id="gpt-5.4",
+        model_id=os.getenv("GPT_MODEL_ID", "gpt-5.4"),
         provider="openai",
         display_name="GPT-5.4",
         color="#10B981",
@@ -75,7 +81,7 @@ REGULAR_MODELS = {
         verbosity="medium",
     ),
     "gemini": ModelConfig(
-        model_id="gemini-3.1-pro-preview",
+        model_id=os.getenv("GEMINI_MODEL_ID", "gemini-3.1-pro-preview"),
         provider="gemini",
         display_name="Gemini 3.1 Pro",
         color="#6366F1",
@@ -86,7 +92,7 @@ REGULAR_MODELS = {
         top_p=0.95,
     ),
     "grok": ModelConfig(
-        model_id="grok-4.20-non-reasoning",
+        model_id=GROK_MODEL_ID,
         provider="grok",
         display_name="Grok 4.20",
         color="#EC4899",
@@ -94,13 +100,22 @@ REGULAR_MODELS = {
         temperature=0.7,
         max_tokens=1024,
     ),
+    "ollama": ModelConfig(
+        model_id=os.getenv("OLLAMA_MODEL_ID", "gemma2:2b"),
+        provider="ollama",
+        display_name="Ollama (Local)",
+        color="#8B5CF6",
+        icon="🖳",
+        temperature=0.7,
+        max_tokens=1024,
+    ),
 }
 
 OVERDRIVE_MODELS = {
     "claude": ModelConfig(
-        model_id="claude-opus-4-6",
+        model_id=os.getenv("CLAUDE_OVERDRIVE_MODEL_ID", "claude-opus-4-7"),
         provider="anthropic",
-        display_name="Claude Opus 4.6",
+        display_name="Claude Opus 4.7",
         color="#D97706",
         icon="◈",
         max_tokens=32000,
@@ -108,7 +123,7 @@ OVERDRIVE_MODELS = {
         effort="max",
     ),
     "gpt": ModelConfig(
-        model_id="gpt-5.4",
+        model_id=os.getenv("GPT_OVERDRIVE_MODEL_ID", "gpt-5.4"),
         provider="openai",
         display_name="GPT-5.4",
         color="#10B981",
@@ -118,7 +133,7 @@ OVERDRIVE_MODELS = {
         verbosity="high",
     ),
     "gemini": ModelConfig(
-        model_id="gemini-3.1-pro-preview",
+        model_id=os.getenv("GEMINI_OVERDRIVE_MODEL_ID", "gemini-3.1-pro-preview"),
         provider="gemini",
         display_name="Gemini 3.1 Pro",
         color="#6366F1",
@@ -129,12 +144,22 @@ OVERDRIVE_MODELS = {
         top_p=0.95,
     ),
     "grok": ModelConfig(
-        model_id="grok-4.20-reasoning",
+        model_id=GROK_OVERDRIVE_MODEL_ID,
         provider="grok",
         display_name="Grok 4.20",
         color="#EC4899",
         icon="✕",
         temperature=0.9,
+        max_tokens=2048,
+        thinking={"type": "adaptive"},
+    ),
+    "ollama": ModelConfig(
+        model_id=os.getenv("OLLAMA_OVERDRIVE_MODEL_ID", "llama3:8b"),
+        provider="ollama",
+        display_name="Ollama (Local)",
+        color="#8B5CF6",
+        icon="🖳",
+        temperature=0.7,
         max_tokens=2048,
     ),
 }
@@ -147,9 +172,9 @@ OVERDRIVE_MODELS = {
 
 ANCHOR_ORDERS = {
     # Knowledge anchor: Claude last (best at professional knowledge work)
-    "knowledge": ["grok", "gpt", "gemini", "claude"],
+    "knowledge": ["ollama", "grok", "gpt", "gemini", "claude"],
     # Abstract anchor: Gemini last (best at abstract reasoning, novel logic)
-    "abstract": ["grok", "gpt", "claude", "gemini"],
+    "abstract": ["ollama", "grok", "gpt", "claude", "gemini"],
 }
 
 

@@ -18,6 +18,7 @@ protocol-specific rendering logic.
 import json
 import asyncio
 import logging
+import dataclasses
 from typing import AsyncGenerator
 from sqlmodel import Session, select
 
@@ -36,6 +37,31 @@ CLIENTS = {
     "gemini": gemini,
     "grok": grok,
 }
+
+
+def _apply_overrides(
+    models: dict[str, ModelConfig],
+    overrides: dict | None
+) -> dict[str, ModelConfig]:
+    """Apply runtime settings overrides from the frontend to ModelConfig objects."""
+    if not overrides:
+        return models
+
+    updated_models = {}
+    for model_key, config in models.items():
+        if model_key in overrides and overrides[model_key]:
+            model_overrides = overrides[model_key]
+            valid_fields = {}
+            for field_name in dataclasses.fields(ModelConfig):
+                if field_name.name in model_overrides:
+                    valid_fields[field_name.name] = model_overrides[field_name.name]
+            
+            # Create a new config with the overridden fields
+            updated_models[model_key] = dataclasses.replace(config, **valid_fields)
+        else:
+            updated_models[model_key] = config
+    return updated_models
+
 
 
 def _resolve_context(
@@ -68,11 +94,14 @@ async def run_round(
     session: Session,
     context_mode: str = "full",
     selected_topics: list[str] | None = None,
+    model_overrides: dict | None = None,
+    forced_dissent: bool = False,
 ) -> AsyncGenerator[str, None]:
     """
     Execute a full round-robin and yield SSE events.
     """
     models, order = get_active_config(mode, anchor, enabled_models)
+    models = _apply_overrides(models, model_overrides)
 
     # Auto-compact if context pressure is high
     compact_stats = await _auto_compact_if_needed(conversation_id, session)
@@ -81,9 +110,10 @@ async def run_round(
 
     # Accumulate messages for this round (user + each model's response)
     round_messages = _load_conversation_history(conversation_id, session)
-    round_messages.append({
-        "role": "user", "model": "user", "name": "Jack", "content": user_message,
-    })
+    if not round_messages or not (round_messages[-1]["role"] == "user" and round_messages[-1]["content"] == user_message):
+        round_messages.append({
+            "role": "user", "model": "user", "name": "Jack", "content": user_message,
+        })
 
     # Resolve context via memory-as-hint system
     resolved_context, loaded_topics = _resolve_context(
@@ -96,7 +126,9 @@ async def run_round(
     for model_key in order:
         config = models[model_key]
         client = CLIENTS[config.provider]
-        system_prompt = build_system_prompt(effective_context, mode, config.display_name)
+        system_prompt = build_system_prompt(
+            effective_context, mode, config.display_name, forced_dissent=forced_dissent
+        )
 
         yield _sse({"type": "model_start", "model": model_key, "name": config.display_name})
 
@@ -104,9 +136,12 @@ async def run_round(
             formatted = client.format_history(round_messages, model_key)
             full_response = ""
             stream = client.call_stream(formatted, config, system_prompt)
-            async for delta in stream:
-                full_response += delta
-                yield _sse({"type": "token", "model": model_key, "delta": delta})
+            async for is_thinking, delta in _read_stream(stream):
+                if is_thinking:
+                    yield _sse({"type": "thinking_token", "model": model_key, "delta": delta})
+                else:
+                    full_response += delta
+                    yield _sse({"type": "token", "model": model_key, "delta": delta})
 
             thinking_content = getattr(stream, "thinking_content", None)
 
@@ -123,7 +158,13 @@ async def run_round(
         except Exception as e:
             error_msg = str(e)
             logger.error("Model %s failed: %s", model_key, error_msg, exc_info=True)
-            yield _sse({"type": "model_error", "model": model_key, "error": error_msg})
+            err_details = _format_provider_error(e)
+            yield _sse({
+                "type": "model_error",
+                "model": model_key,
+                "error": error_msg,
+                "error_details": err_details
+            })
 
             _save_msg(session, conversation_id, model_key, config.display_name,
                       f"⚠ Error: {error_msg}", is_error=True)
@@ -146,15 +187,19 @@ async def run_blind(
     session: Session,
     context_mode: str = "full",
     selected_topics: list[str] | None = None,
+    model_overrides: dict | None = None,
+    forced_dissent: bool = False,
 ) -> AsyncGenerator[str, None]:
     """All models answer independently in parallel (blind), then the anchor synthesizes."""
     models, order = get_active_config(mode, anchor, enabled_models)
+    models = _apply_overrides(models, model_overrides)
 
     if len(order) < 2:
         async for event in run_round(
             conversation_id, user_message, mode, anchor,
             enabled_models, context_content, session,
             context_mode=context_mode, selected_topics=selected_topics,
+            model_overrides=model_overrides, forced_dissent=forced_dissent,
         ):
             yield event
         return
@@ -165,7 +210,8 @@ async def run_blind(
         yield _sse({"type": "compaction", **compact_stats})
 
     history = _load_conversation_history(conversation_id, session)
-    history.append({"role": "user", "model": "user", "name": "Jack", "content": user_message})
+    if not history or not (history[-1]["role"] == "user" and history[-1]["content"] == user_message):
+        history.append({"role": "user", "model": "user", "name": "Jack", "content": user_message})
 
     resolved_context, loaded_topics = _resolve_context(
         user_message, history, context_mode, selected_topics, session,
@@ -184,6 +230,7 @@ async def run_blind(
         client = CLIENTS[config.provider]
         system_prompt = build_system_prompt(
             effective_context, mode, config.display_name, protocol="blind",
+            forced_dissent=forced_dissent,
         )
 
         await event_queue.put(_sse({
@@ -195,9 +242,12 @@ async def run_blind(
             formatted = client.format_history(history, model_key)
             full_response = ""
             stream = client.call_stream(formatted, config, system_prompt)
-            async for delta in stream:
-                full_response += delta
-                await event_queue.put(_sse({"type": "token", "model": model_key, "delta": delta}))
+            async for is_thinking, delta in _read_stream(stream):
+                if is_thinking:
+                    await event_queue.put(_sse({"type": "thinking_token", "model": model_key, "delta": delta}))
+                else:
+                    full_response += delta
+                    await event_queue.put(_sse({"type": "token", "model": model_key, "delta": delta}))
 
             thinking_content = getattr(stream, "thinking_content", None)
             results[model_key] = {"content": full_response, "thinking": thinking_content, "error": False}
@@ -213,7 +263,13 @@ async def run_blind(
         except Exception as e:
             error_msg = str(e)
             results[model_key] = {"content": f"⚠ Error: {error_msg}", "thinking": None, "error": True}
-            await event_queue.put(_sse({"type": "model_error", "model": model_key, "error": error_msg}))
+            err_details = _format_provider_error(e)
+            await event_queue.put(_sse({
+                "type": "model_error",
+                "model": model_key,
+                "error": error_msg,
+                "error_details": err_details
+            }))
             _save_msg(session, conversation_id, model_key, config.display_name,
                       f"⚠ Error: {error_msg}", is_error=True, protocol_role="proposal")
 
@@ -237,6 +293,7 @@ async def run_blind(
     anchor_config = models[anchor_key]
     anchor_client = CLIENTS[anchor_config.provider]
 
+    # Map database logic back to display names
     response_summaries = []
     for i, mk in enumerate(independent_keys):
         r = results.get(mk, {})
@@ -251,6 +308,7 @@ async def run_blind(
     synthesis_system = build_system_prompt(
         effective_context, mode, anchor_config.display_name,
         protocol="blind", protocol_role_prompt=PROTOCOL_PROMPTS["synthesis"],
+        forced_dissent=forced_dissent,
     )
 
     yield _sse({
@@ -266,9 +324,12 @@ async def run_blind(
 
         full_response = ""
         stream = anchor_client.call_stream(formatted, anchor_config, synthesis_system)
-        async for delta in stream:
-            full_response += delta
-            yield _sse({"type": "token", "model": anchor_key, "delta": delta})
+        async for is_thinking, delta in _read_stream(stream):
+            if is_thinking:
+                yield _sse({"type": "thinking_token", "model": anchor_key, "delta": delta})
+            else:
+                full_response += delta
+                yield _sse({"type": "token", "model": anchor_key, "delta": delta})
 
         thinking_content = getattr(stream, "thinking_content", None)
 
@@ -283,7 +344,13 @@ async def run_blind(
 
     except Exception as e:
         error_msg = str(e)
-        yield _sse({"type": "model_error", "model": anchor_key, "error": error_msg})
+        err_details = _format_provider_error(e)
+        yield _sse({
+            "type": "model_error",
+            "model": anchor_key,
+            "error": error_msg,
+            "error_details": err_details
+        })
         _save_msg(session, conversation_id, anchor_key, anchor_config.display_name,
                   f"⚠ Error: {error_msg}", is_error=True, protocol_role="synthesis")
 
@@ -306,11 +373,14 @@ async def run_debate(
     debate_roles: dict[str, str] | None = None,
     context_mode: str = "full",
     selected_topics: list[str] | None = None,
+    model_overrides: dict | None = None,
+    forced_dissent: bool = False,
 ) -> AsyncGenerator[str, None]:
     """
     Debate protocol: proposers → critic (anonymized) → arbiter (full attribution).
     """
     models, order = get_active_config(mode, anchor, enabled_models)
+    models = _apply_overrides(models, model_overrides)
 
     if len(order) < 3:
         fallback = run_blind if len(order) >= 2 else run_round
@@ -318,6 +388,7 @@ async def run_debate(
             conversation_id, user_message, mode, anchor,
             enabled_models, context_content, session,
             context_mode=context_mode, selected_topics=selected_topics,
+            model_overrides=model_overrides, forced_dissent=forced_dissent,
         ):
             yield event
         return
@@ -328,7 +399,8 @@ async def run_debate(
         yield _sse({"type": "compaction", **compact_stats})
 
     history = _load_conversation_history(conversation_id, session)
-    history.append({"role": "user", "model": "user", "name": "Jack", "content": user_message})
+    if not history or not (history[-1]["role"] == "user" and history[-1]["content"] == user_message):
+        history.append({"role": "user", "model": "user", "name": "Jack", "content": user_message})
 
     resolved_context, loaded_topics = _resolve_context(
         user_message, history, context_mode, selected_topics, session,
@@ -361,6 +433,7 @@ async def run_debate(
         client = CLIENTS[config.provider]
         system_prompt = build_system_prompt(
             effective_context, mode, config.display_name, protocol="blind",
+            forced_dissent=forced_dissent,
         )
 
         await event_queue.put(_sse({
@@ -372,9 +445,12 @@ async def run_debate(
             formatted = client.format_history(history, model_key)
             full_response = ""
             stream = client.call_stream(formatted, config, system_prompt)
-            async for delta in stream:
-                full_response += delta
-                await event_queue.put(_sse({"type": "token", "model": model_key, "delta": delta}))
+            async for is_thinking, delta in _read_stream(stream):
+                if is_thinking:
+                    await event_queue.put(_sse({"type": "thinking_token", "model": model_key, "delta": delta}))
+                else:
+                    full_response += delta
+                    await event_queue.put(_sse({"type": "token", "model": model_key, "delta": delta}))
 
             thinking_content = getattr(stream, "thinking_content", None)
             proposals[model_key] = {"content": full_response, "thinking": thinking_content}
@@ -390,7 +466,13 @@ async def run_debate(
         except Exception as e:
             error_msg = str(e)
             proposals[model_key] = {"content": f"⚠ Error: {error_msg}", "thinking": None}
-            await event_queue.put(_sse({"type": "model_error", "model": model_key, "error": error_msg}))
+            err_details = _format_provider_error(e)
+            await event_queue.put(_sse({
+                "type": "model_error",
+                "model": model_key,
+                "error": error_msg,
+                "error_details": err_details
+            }))
             _save_msg(session, conversation_id, model_key, config.display_name,
                       f"⚠ Error: {error_msg}", is_error=True, protocol_role="proposal")
 
@@ -429,6 +511,7 @@ async def run_debate(
         critic_system = build_system_prompt(
             effective_context, mode, critic_config.display_name,
             protocol="debate", protocol_role_prompt=PROTOCOL_PROMPTS["critic"],
+            forced_dissent=forced_dissent,
         )
 
         yield _sse({
@@ -443,9 +526,12 @@ async def run_debate(
             formatted = critic_client.format_history(critic_history, critic_key)
 
             stream = critic_client.call_stream(formatted, critic_config, critic_system)
-            async for delta in stream:
-                critique_content += delta
-                yield _sse({"type": "token", "model": critic_key, "delta": delta})
+            async for is_thinking, delta in _read_stream(stream):
+                if is_thinking:
+                    await event_queue.put(_sse({"type": "thinking_token", "model": critic_key, "delta": delta}))
+                else:
+                    critique_content += delta
+                    await event_queue.put(_sse({"type": "token", "model": critic_key, "delta": delta}))
 
             thinking_content = getattr(stream, "thinking_content", None)
 
@@ -459,7 +545,13 @@ async def run_debate(
 
         except Exception as e:
             error_msg = str(e)
-            yield _sse({"type": "model_error", "model": critic_key, "error": error_msg})
+            err_details = _format_provider_error(e)
+            yield _sse({
+                "type": "model_error",
+                "model": critic_key,
+                "error": error_msg,
+                "error_details": err_details
+            })
             _save_msg(session, conversation_id, critic_key, critic_config.display_name,
                       f"⚠ Error: {error_msg}", is_error=True, protocol_role="critic")
 
@@ -487,6 +579,7 @@ async def run_debate(
     arbiter_system = build_system_prompt(
         effective_context, mode, arbiter_config.display_name,
         protocol="debate", protocol_role_prompt=arbiter_role_prompt,
+        forced_dissent=forced_dissent,
     )
 
     yield _sse({
@@ -502,9 +595,12 @@ async def run_debate(
 
         full_response = ""
         stream = arbiter_client.call_stream(formatted, arbiter_config, arbiter_system)
-        async for delta in stream:
-            full_response += delta
-            yield _sse({"type": "token", "model": arbiter_key, "delta": delta})
+        async for is_thinking, delta in _read_stream(stream):
+            if is_thinking:
+                yield _sse({"type": "thinking_token", "model": arbiter_key, "delta": delta})
+            else:
+                full_response += delta
+                yield _sse({"type": "token", "model": arbiter_key, "delta": delta})
 
         thinking_content = getattr(stream, "thinking_content", None)
 
@@ -519,7 +615,13 @@ async def run_debate(
 
     except Exception as e:
         error_msg = str(e)
-        yield _sse({"type": "model_error", "model": arbiter_key, "error": error_msg})
+        err_details = _format_provider_error(e)
+        yield _sse({
+            "type": "model_error",
+            "model": arbiter_key,
+            "error": error_msg,
+            "error_details": err_details
+        })
         _save_msg(session, conversation_id, arbiter_key, arbiter_config.display_name,
                   f"⚠ Error: {error_msg}", is_error=True, protocol_role="synthesis")
 
@@ -590,3 +692,33 @@ def _save_msg(session, conversation_id, model_key, display_name, content,
 def _sse(data: dict) -> str:
     """Format a dict as an SSE data line."""
     return f"data: {json.dumps(data)}\n\n"
+
+
+async def _read_stream(stream):
+    """Yields (is_thinking, delta_text) for each chunk in the stream."""
+    async for delta in stream:
+        if isinstance(delta, dict):
+            yield (delta["type"] == "thinking"), delta["text"]
+        else:
+            yield False, delta
+
+
+def _format_provider_error(e: Exception) -> dict:
+    """Format an LLM provider exception into structured error info for UI and metrics."""
+    status = getattr(e, "status_code", getattr(e, "status", None))
+    msg = getattr(e, "message", str(e))
+    
+    err_type = "unknown"
+    if status == 429 or "rate limit" in str(e).lower():
+        err_type = "rate_limit"
+    elif "safety" in str(e).lower() or "filter" in str(e).lower() or "policy" in str(e).lower():
+        err_type = "content_filter"
+        
+    return {
+        "type": err_type,
+        "provider_message": msg,
+        "status": status
+    }
+
+
+

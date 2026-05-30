@@ -12,6 +12,8 @@ class Conversation(SQLModel, table=True):
     protocol: str = "roundtable"    # "roundtable", "blind", or "debate"
     context_mode: str = "full"      # "full", "select", or "none"
     selected_topics: Optional[str] = Field(default=None)  # JSON list: '["thesis","projects"]' or null
+    forced_dissent: bool = Field(default=False)
+    archived: bool = Field(default=False)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 

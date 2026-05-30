@@ -12,10 +12,10 @@
  */
 import { useRef, useCallback } from "react";
 
-export default function useSSE({ onModelStart, onToken, onModelDone, onModelError, onContextLoaded, onCompaction, onRoundDone }) {
+export default function useSSE({ onModelStart, onToken, onThinkingToken, onModelDone, onModelError, onContextLoaded, onCompaction, onRoundDone }) {
   const sourceRef = useRef(null);
 
-  const startStream = useCallback((conversationId, { mode, anchor, protocol, enabled_models, debate_roles, context_mode, selected_topics }) => {
+  const startStream = useCallback((conversationId, { mode, anchor, protocol, enabled_models, debate_roles, context_mode, selected_topics, model_overrides }) => {
     if (sourceRef.current) {
       sourceRef.current.close();
     }
@@ -34,6 +34,9 @@ export default function useSSE({ onModelStart, onToken, onModelDone, onModelErro
     }
     if (selected_topics && selected_topics.length > 0) {
       params.set("selected_topics", JSON.stringify(selected_topics));
+    }
+    if (model_overrides) {
+      params.set("model_overrides", JSON.stringify(model_overrides));
     }
 
     const url = `/chat/stream/${conversationId}?${params}`;
@@ -57,11 +60,14 @@ export default function useSSE({ onModelStart, onToken, onModelDone, onModelErro
           case "token":
             onToken?.(data.model, data.delta);
             break;
+          case "thinking_token":
+            onThinkingToken?.(data.model, data.delta);
+            break;
           case "model_done":
-            onModelDone?.(data.model, data.content, data.protocol_role);
+            onModelDone?.(data.model, data.content, data.protocol_role, data.thinking_content);
             break;
           case "model_error":
-            onModelError?.(data.model, data.error);
+            onModelError?.(data.model, data.error, data.error_details);
             break;
           case "round_done":
             onRoundDone?.(data.context_tokens, data.context_limit);
@@ -81,5 +87,12 @@ export default function useSSE({ onModelStart, onToken, onModelDone, onModelErro
     };
   }, [onModelStart, onToken, onModelDone, onModelError, onContextLoaded, onCompaction, onRoundDone]);
 
-  return { startStream };
+  const stopStream = useCallback(() => {
+    if (sourceRef.current) {
+      sourceRef.current.close();
+      sourceRef.current = null;
+    }
+  }, []);
+
+  return { startStream, stopStream };
 }

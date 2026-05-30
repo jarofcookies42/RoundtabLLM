@@ -27,24 +27,25 @@ const PROTOCOLS = [
   },
 ];
 
-export default function ProtocolToggle({ protocol, onChange }) {
+export default function ProtocolToggle({ protocol, onChange, disabled }) {
   const current = PROTOCOLS.find((p) => p.id === protocol) || PROTOCOLS[0];
   const nextIdx = (PROTOCOLS.findIndex((p) => p.id === protocol) + 1) % PROTOCOLS.length;
 
   return (
     <button
-      onClick={() => onChange(PROTOCOLS[nextIdx].id)}
-      title={current.desc}
+      onClick={() => !disabled && onChange(PROTOCOLS[nextIdx].id)}
+      title={disabled ? `${current.desc} (Locked for this conversation)` : current.desc}
       style={{
         padding: "6px 14px",
         borderRadius: 16,
-        border: `1.5px solid ${current.color}40`,
-        background: current.color + "12",
-        color: current.color,
+        border: `1.5px solid ${disabled ? "#27272a" : current.color}40`,
+        background: disabled ? "transparent" : current.color + "12",
+        color: disabled ? "#52525b" : current.color,
         fontFamily: "inherit",
         fontSize: 11,
         fontWeight: 600,
-        cursor: "pointer",
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.6 : 1,
         letterSpacing: "0.04em",
         transition: "all 0.2s",
         whiteSpace: "nowrap",

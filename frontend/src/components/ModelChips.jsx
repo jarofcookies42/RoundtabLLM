@@ -11,12 +11,14 @@ const MODE_LABELS = {
     gpt: "none reasoning",
     gemini: "low think",
     grok: "non-reasoning",
+    ollama: "gemma2:2b",
   },
   overdrive: {
-    claude: "Opus 4.6",
+    claude: "Opus 4.7",
     gpt: "high reasoning",
     gemini: "Deep Think",
     grok: "reasoning",
+    ollama: "llama3:8b",
   },
 };
 

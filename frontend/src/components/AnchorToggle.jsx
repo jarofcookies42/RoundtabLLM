@@ -10,22 +10,24 @@
  * The anchor sees all other models' full responses before generating its own.
  */
 
-export default function AnchorToggle({ anchor, onChange }) {
+export default function AnchorToggle({ anchor, onChange, disabled }) {
   const isAbstract = anchor === "abstract";
 
   return (
     <button
-      onClick={() => onChange(isAbstract ? "knowledge" : "abstract")}
+      onClick={() => !disabled && onChange(isAbstract ? "knowledge" : "abstract")}
+      title={disabled ? "Locked for this conversation" : ""}
       style={{
         padding: "6px 14px",
         borderRadius: 16,
-        border: `1.5px solid ${isAbstract ? "#6366F1" : "#D97706"}`,
-        background: isAbstract ? "#6366F115" : "#D9770615",
-        color: isAbstract ? "#A5B4FC" : "#FBBF24",
+        border: `1.5px solid ${disabled ? "#27272a" : isAbstract ? "#6366F1" : "#D97706"}`,
+        background: disabled ? "transparent" : isAbstract ? "#6366F115" : "#D9770615",
+        color: disabled ? "#52525b" : isAbstract ? "#A5B4FC" : "#FBBF24",
         fontFamily: "inherit",
         fontSize: 11,
         fontWeight: 600,
-        cursor: "pointer",
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.6 : 1,
         letterSpacing: "0.04em",
         transition: "all 0.2s",
         whiteSpace: "nowrap",

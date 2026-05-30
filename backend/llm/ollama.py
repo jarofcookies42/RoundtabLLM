@@ -1,17 +1,9 @@
 """
-xAI Grok 4.20 client (OpenAI-compatible API).
-
-KEY CONSTRAINTS:
-- Uses OpenAI SDK with custom base_url: https://api.x.ai/v1
-- Temperature is a free parameter (0.0–2.0). Only model where it matters.
-- Regular: grok-4.20-non-reasoning (t=0.7) — standard fast inference.
-- Overdrive: grok-4.20-reasoning (t=0.9) — internal chain-of-thought reasoning.
-  Reasoning tokens are hidden by the Chat Completions API (billed but not visible).
-- Reasoning tokens are NOT exposed via Chat Completions API.
+Ollama Local LLM client (OpenAI-compatible local API).
 """
 import openai
 from typing import AsyncGenerator
-from ..config import ModelConfig, GROK_API_KEY, GROK_MODEL_ID, GROK_OVERDRIVE_MODEL_ID
+from ..config import ModelConfig
 
 _client = None
 
@@ -19,22 +11,12 @@ _client = None
 def _get_client():
     global _client
     if _client is None:
-        _client = openai.AsyncOpenAI(api_key=GROK_API_KEY, base_url="https://api.x.ai/v1")
+        _client = openai.AsyncOpenAI(api_key="ollama", base_url="http://localhost:11434/v1")
     return _client
 
 
-def resolve_grok_model(config: ModelConfig) -> str:
-    """
-    Resolves the model ID for Grok depending on the thinking configuration.
-    If thinking is enabled, selects the reasoning model; otherwise selects the non-reasoning model.
-    """
-    if config.thinking:
-        return GROK_OVERDRIVE_MODEL_ID
-    return GROK_MODEL_ID
-
-
-def format_history(messages: list[dict], model_key: str = "grok") -> list[dict]:
-    """Same format as OpenAI. Own messages = assistant, everything else = user."""
+def format_history(messages: list[dict], model_key: str = "ollama") -> list[dict]:
+    """Own messages = assistant, everything else = user."""
     formatted = []
     for msg in messages:
         if msg["model"] == model_key:
@@ -46,12 +28,11 @@ def format_history(messages: list[dict], model_key: str = "grok") -> list[dict]:
 
 
 async def call(messages: list[dict], config: ModelConfig, system_prompt: str) -> str:
-    """Call Grok API and return the full response."""
+    """Call local Ollama API and return the full response."""
     api_messages = [{"role": "system", "content": system_prompt}] + messages
-    model_id = resolve_grok_model(config)
 
     kwargs = {
-        "model": model_id,
+        "model": config.model_id,
         "messages": api_messages,
         "max_tokens": config.max_tokens,
     }
@@ -67,12 +48,11 @@ async def call_stream(
     config: ModelConfig,
     system_prompt: str,
 ) -> AsyncGenerator[str, None]:
-    """Stream Grok response tokens via async generator."""
+    """Stream Ollama response tokens via async generator."""
     api_messages = [{"role": "system", "content": system_prompt}] + messages
-    model_id = resolve_grok_model(config)
 
     kwargs = {
-        "model": model_id,
+        "model": config.model_id,
         "messages": api_messages,
         "max_tokens": config.max_tokens,
         "stream": True,

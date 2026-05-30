@@ -1,47 +1,21 @@
 """
 Compaction pipeline — summarizes older conversation messages to reduce context size.
 
-Keeps recent messages verbatim and replaces older ones with a Claude-generated
+Keeps recent messages verbatim and replaces older ones with a model-generated
 summary. Compacted messages stay in the DB for export/audit but are excluded
 from the history sent to models.
 """
 import logging
 from sqlmodel import Session, select
 
-import anthropic
-
-from ..config import ANTHROPIC_API_KEY
+from ..config import REGULAR_MODELS, COMPACTION_MODEL_KEY
+from ..prompts import COMPACTION_PROMPT, COMPACTION_SYSTEM_PROMPT
 from ..models import Message
 
 logger = logging.getLogger("roundtable.compaction")
 
 COMPACTION_THRESHOLD = 30000  # tokens (~120K chars / 4)
 MIN_MESSAGES_TO_COMPACT = 10  # need at least this many before compacting
-
-COMPACTION_PROMPT = """You are compacting a multi-AI roundtable conversation to save context space. Below is the older portion of the conversation that needs to be summarized.
-
-Participants: Jack (human user), Claude, GPT-5.4, Gemini 3.1 Pro, Grok 4.20
-
-Transcript to summarize:
-{transcript}
-
-Create a concise summary that preserves:
-- Key decisions and conclusions reached
-- Important disagreements between models (who said what)
-- Action items or commitments Jack made
-- Any facts, data, or references that were shared
-- The overall arc of the discussion
-
-Do NOT preserve:
-- Greetings, pleasantries, meta-commentary about the roundtable itself
-- Redundant agreement ("I agree with Claude" when the agreement adds nothing)
-- Test messages or debugging
-
-Format as a compact narrative paragraph, not bullet points. Keep it under 500 tokens. Start with "Earlier in this conversation:" so models know this is a summary, not a real message."""
-
-
-def _get_client():
-    return anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
 
 
 def estimate_tokens(messages: list) -> int:
@@ -93,19 +67,23 @@ async def compact_conversation(
         transcript_lines.append(f"[{m.name}]{tier_tag}: {m.content}")
     transcript = "\n\n".join(transcript_lines)
 
-    # Call Claude for summary
-    client = _get_client()
+    # Resolve client dynamically to avoid circular imports
+    from ..llm.router import CLIENTS
+    config = REGULAR_MODELS[COMPACTION_MODEL_KEY]
+    client = CLIENTS[config.provider]
+
     prompt = COMPACTION_PROMPT.format(transcript=transcript)
+    system_prompt = COMPACTION_SYSTEM_PROMPT
 
     try:
-        response = await client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1024,
-            system="You are a conversation compactor. Output only the summary.",
-            messages=[{"role": "user", "content": prompt}],
-        )
-        summary = response.content[0].text.strip()
-        summary_tokens = (response.usage.input_tokens or 0) + (response.usage.output_tokens or 0)
+        temp_messages = [{"role": "user", "model": "user", "name": "Jack", "content": prompt}]
+        formatted = client.format_history(temp_messages, COMPACTION_MODEL_KEY)
+        
+        summary = await client.call(formatted, config, system_prompt)
+        summary = summary.strip()
+        
+        # Estimate summary tokens
+        summary_tokens = estimate_tokens([{"content": summary}])
     except Exception as e:
         logger.error("Compaction failed for conversation %d: %s", conversation_id, str(e))
         return {"error": str(e)}

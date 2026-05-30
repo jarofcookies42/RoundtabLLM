@@ -15,8 +15,8 @@ const headers = () => {
   };
 };
 
-export async function sendMessage({ message, conversation_id, mode, anchor, protocol, enabled_models, debate_roles, context_mode, selected_topics }) {
-  const body = { message, conversation_id, mode, anchor, protocol, enabled_models, context_mode };
+export async function sendMessage({ message, conversation_id, mode, anchor, protocol, enabled_models, debate_roles, context_mode, selected_topics, forced_dissent }) {
+  const body = { message, conversation_id, mode, anchor, protocol, enabled_models, context_mode, forced_dissent };
   if (debate_roles) body.debate_roles = debate_roles;
   if (selected_topics) body.selected_topics = selected_topics;
   const res = await fetch("/chat", {
@@ -148,4 +148,32 @@ export async function exportConversation(id) {
 export function setAuthToken(token) {
   localStorage.setItem("roundtable_token", token);
   window.location.reload();
+}
+
+export async function renameConversation(id, title) {
+  const res = await fetch(`/conversations/${id}`, {
+    method: "PATCH",
+    headers: headers(),
+    body: JSON.stringify({ title }),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
+export async function deleteConversation(id) {
+  const res = await fetch(`/conversations/${id}`, {
+    method: "DELETE",
+    headers: headers(),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
+export async function deleteMessage(id) {
+  const res = await fetch(`/messages/${id}`, {
+    method: "DELETE",
+    headers: headers(),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
 }

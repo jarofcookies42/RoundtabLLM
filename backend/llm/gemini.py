@@ -54,43 +54,83 @@ def format_history(messages: list[dict], model_key: str = "gemini") -> list[dict
     return merged
 
 
+class ThinkingStream:
+    """Async iterable wrapper that captures thinking blocks while yielding text deltas."""
+
+    def __init__(self, aiter):
+        self._aiter = aiter
+        self.thinking_content: str | None = None
+        self._thinking_parts: list[str] = []
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        return await self._aiter.__anext__()
+
+    def _finalize(self):
+        self.thinking_content = "".join(self._thinking_parts) if self._thinking_parts else None
+
+
 async def call(messages: list[dict], config: ModelConfig, system_prompt: str) -> str:
-    """Call Gemini and return the full text response."""
+    """Call Gemini and return the full text response (excluding thoughts)."""
     client = _get_client()
     gen_config = _build_gen_config(config)
+    if config.thinking_level is not None:
+        gen_config["include_thoughts"] = True
 
     response = await client.aio.models.generate_content(
         model=config.model_id,
         contents=messages,
         config=_build_generate_config(gen_config, system_prompt),
     )
-    return response.text or ""
+    # Extract only final text parts (exclude thoughts)
+    parts = []
+    if response.candidates:
+        for candidate in response.candidates:
+            if candidate.content and candidate.content.parts:
+                for part in candidate.content.parts:
+                    if hasattr(part, "text") and part.text and not getattr(part, "thought", False):
+                        parts.append(part.text)
+    return "".join(parts)
 
 
-async def call_stream(
+def call_stream(
     messages: list[dict],
     config: ModelConfig,
     system_prompt: str,
-) -> AsyncGenerator[str, None]:
-    """Stream Gemini response tokens."""
+) -> ThinkingStream:
+    """Stream Gemini response tokens and separate thoughts."""
     client = _get_client()
     gen_config = _build_gen_config(config)
+    if config.thinking_level is not None:
+        gen_config["include_thoughts"] = True
 
-    stream = await client.aio.models.generate_content_stream(
-        model=config.model_id,
-        contents=messages,
-        config=_build_generate_config(gen_config, system_prompt),
-    )
-    async for chunk in stream:
-        # Extract text from all candidates/parts to avoid dropping content
-        if chunk.candidates:
-            for candidate in chunk.candidates:
-                if candidate.content and candidate.content.parts:
-                    for part in candidate.content.parts:
-                        if hasattr(part, "text") and part.text:
-                            yield part.text
-        elif chunk.text:
-            yield chunk.text
+    async def _generate():
+        stream = await client.aio.models.generate_content_stream(
+            model=config.model_id,
+            contents=messages,
+            config=_build_generate_config(gen_config, system_prompt),
+        )
+        async for chunk in stream:
+            if chunk.candidates:
+                for candidate in chunk.candidates:
+                    if candidate.content and candidate.content.parts:
+                        for part in candidate.content.parts:
+                            is_thought = getattr(part, 'thought', False)
+                            text = getattr(part, 'text', '')
+                            if text:
+                                if is_thought:
+                                    wrapper._thinking_parts.append(text)
+                                    yield {"type": "thinking", "text": text}
+                                else:
+                                    yield {"type": "text", "text": text}
+            elif chunk.text:
+                yield {"type": "text", "text": chunk.text}
+        wrapper._finalize()
+
+    wrapper = ThinkingStream(_generate())
+    return wrapper
 
 
 _THINKING_BUDGETS = {"low": 1024, "medium": 4096, "high": -1}
@@ -107,7 +147,10 @@ def _build_generate_config(gen_config: dict, system_prompt: str) -> types.Genera
     thinking_level = gen_config.get("thinking_level")
     if thinking_level:
         budget = _THINKING_BUDGETS.get(thinking_level, 0)
-        kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=budget)
+        kwargs["thinking_config"] = types.ThinkingConfig(
+            thinking_budget=budget,
+            include_thoughts=gen_config.get("include_thoughts", False)
+        )
     return types.GenerateContentConfig(**kwargs)
 
 

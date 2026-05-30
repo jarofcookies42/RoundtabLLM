@@ -20,7 +20,7 @@ const ALLOWED_TEXT_EXTS = [".md", ".txt", ".py", ".json", ".js", ".ts", ".jsx", 
 const MAX_TEXT_SIZE = 100 * 1024; // 100KB
 const MAX_PDF_SIZE = 1 * 1024 * 1024; // 1MB
 
-export default function ChatView({ messages, activeModel, anchorModel, sending, onSend, inputRef, enabledModels, contextTokens, contextLimit, compactionNotice }) {
+export default function ChatView({ messages, activeModel, anchorModel, sending, onSend, onRegenerate, onStop, inputRef, enabledModels, contextTokens, contextLimit, compactionNotice }) {
   const chatEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const [attachedFile, setAttachedFile] = useState(null); // { name, content }
@@ -35,8 +35,8 @@ export default function ChatView({ messages, activeModel, anchorModel, sending, 
       alert(`Unsupported file type: ${ext}\nSupported: ${ALLOWED_TEXT_EXTS.join(", ")}, .pdf`);
       return;
     }
-    if (isPdf && file.size > MAX_PDF_SIZE) {
-      alert(`PDF too large (${(file.size / 1024 / 1024).toFixed(1)}MB). Max 1MB.`);
+    if (isPdf) {
+      alert("Direct PDF uploads are currently not supported because parsing PDF binary data in the browser is unreliable. Please copy and paste the text content directly into the chat composer instead.");
       return;
     }
     if (isText && file.size > MAX_TEXT_SIZE) {
@@ -48,12 +48,7 @@ export default function ChatView({ messages, activeModel, anchorModel, sending, 
     reader.onload = (e) => {
       setAttachedFile({ name: file.name, content: e.target.result });
     };
-    if (isPdf) {
-      // For PDF, read as text (best effort — actual PDF binary won't be useful, but backend could handle it)
-      reader.readAsText(file);
-    } else {
-      reader.readAsText(file);
-    }
+    reader.readAsText(file);
   }, []);
 
   const handleDrop = useCallback((e) => {
@@ -85,8 +80,15 @@ export default function ChatView({ messages, activeModel, anchorModel, sending, 
       e.preventDefault();
       onSend(buildMessage(e.target.value));
       e.target.value = "";
+      e.target.style.height = "auto";
       setAttachedFile(null);
     }
+  };
+
+  const handleInput = (e) => {
+    const textarea = e.target;
+    textarea.style.height = "auto";
+    textarea.style.height = `${textarea.scrollHeight}px`;
   };
 
   return (
@@ -128,7 +130,7 @@ export default function ChatView({ messages, activeModel, anchorModel, sending, 
         )}
 
         {messages.map((msg) => (
-          <MessageBubble key={msg.id} msg={msg} isAnchor={msg.model === anchorModel} />
+          <MessageBubble key={msg.id} msg={msg} isAnchor={msg.model === anchorModel} onRegenerate={onRegenerate} />
         ))}
 
         {/* Typing indicator */}
@@ -249,35 +251,52 @@ export default function ChatView({ messages, activeModel, anchorModel, sending, 
           onMouseEnter={e => { e.target.style.borderColor = "#D97706"; e.target.style.color = "#D97706"; }}
           onMouseLeave={e => { e.target.style.borderColor = "#27272A"; e.target.style.color = attachedFile ? "#D97706" : "#52525B"; }}
         >&#128206;</button>
-        <input
+        <textarea
           ref={inputRef}
+          rows={1}
           placeholder={enabledModels.length === 0 ? "Enable at least one model..." : attachedFile ? `Message about ${attachedFile.name}...` : "Message the roundtable..."}
           onKeyDown={handleKeyDown}
+          onInput={handleInput}
           disabled={sending || enabledModels.length === 0}
           style={{
             flex: 1, background: "#111114", border: "1px solid #27272A", borderRadius: 10,
-            color: "#E4E4E7", padding: "13px 16px", fontSize: 13, fontFamily: "inherit",
-            outline: "none",
+            color: "#E4E4E7", padding: "12px 16px", fontSize: 13, fontFamily: "inherit",
+            outline: "none", resize: "none", maxHeight: 150, overflowY: "auto",
+            lineHeight: 1.5,
           }}
         />
-        <button
-          onClick={() => {
-            if (inputRef.current) {
-              onSend(buildMessage(inputRef.current.value));
-              inputRef.current.value = "";
-              setAttachedFile(null);
-            }
-          }}
-          disabled={sending || enabledModels.length === 0}
-          style={{
-            background: "#D97706", color: "#08080B", border: "none", borderRadius: 10,
-            padding: "13px 22px", fontFamily: "inherit", fontWeight: 700, fontSize: 12,
-            cursor: sending ? "not-allowed" : "pointer", opacity: sending ? 0.35 : 1,
-            letterSpacing: "0.06em",
-          }}
-        >
-          {sending ? "···" : "SEND"}
-        </button>
+        {sending ? (
+          <button
+            onClick={onStop}
+            style={{
+              background: "#EF4444", color: "#08080B", border: "none", borderRadius: 10,
+              padding: "13px 22px", fontFamily: "inherit", fontWeight: 700, fontSize: 12,
+              cursor: "pointer", letterSpacing: "0.06em",
+            }}
+          >
+            STOP
+          </button>
+        ) : (
+          <button
+            onClick={() => {
+              if (inputRef.current) {
+                onSend(buildMessage(inputRef.current.value));
+                inputRef.current.value = "";
+                inputRef.current.style.height = "auto";
+                setAttachedFile(null);
+              }
+            }}
+            disabled={enabledModels.length === 0}
+            style={{
+              background: "#D97706", color: "#08080B", border: "none", borderRadius: 10,
+              padding: "13px 22px", fontFamily: "inherit", fontWeight: 700, fontSize: 12,
+              cursor: enabledModels.length === 0 ? "not-allowed" : "pointer", opacity: enabledModels.length === 0 ? 0.35 : 1,
+              letterSpacing: "0.06em",
+            }}
+          >
+            SEND
+          </button>
+        )}
       </div>
     </div>
   );

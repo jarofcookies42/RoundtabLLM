@@ -68,6 +68,33 @@ def format_history(messages: list[dict], model_key: str = "claude") -> list[dict
     return merged
 
 
+def resolve_thinking_config(config: ModelConfig) -> tuple[dict | None, str | None]:
+    """
+    Resolves and returns the thinking dictionary and effort parameter for the Claude API.
+    Handles compatibility adjustments for models (like Opus 4.7) that only support adaptive thinking.
+    """
+    if not config.thinking:
+        return None, None
+
+    thinking = dict(config.thinking)
+    effort = config.effort
+
+    # If the model is an Opus model, it only supports "adaptive" thinking type.
+    is_opus = "opus" in config.model_id.lower()
+    
+    if is_opus:
+        if thinking.get("type") != "adaptive":
+            thinking["type"] = "adaptive"
+        # Opus doesn't support budget_tokens
+        if "budget_tokens" in thinking:
+            del thinking["budget_tokens"]
+        # Ensure effort is set (defaults to "max" if not specified)
+        if not effort:
+            effort = "max"
+            
+    return thinking, effort
+
+
 async def call(
     messages: list[dict],
     config: ModelConfig,
@@ -83,8 +110,11 @@ async def call(
         "messages": messages,
     }
     # When thinking is enabled, do NOT pass temperature
-    if config.thinking:
-        kwargs["thinking"] = config.thinking
+    thinking, effort = resolve_thinking_config(config)
+    if thinking:
+        kwargs["thinking"] = thinking
+        if effort:
+            kwargs["output_config"] = {"effort": effort}
     elif config.temperature is not None:
         kwargs["temperature"] = config.temperature
 
@@ -113,8 +143,11 @@ def call_stream(
         "system": system_prompt,
         "messages": messages,
     }
-    if config.thinking:
-        kwargs["thinking"] = config.thinking
+    thinking, effort = resolve_thinking_config(config)
+    if thinking:
+        kwargs["thinking"] = thinking
+        if effort:
+            kwargs["output_config"] = {"effort": effort}
     elif config.temperature is not None:
         kwargs["temperature"] = config.temperature
 
@@ -123,9 +156,10 @@ def call_stream(
             async for event in stream:
                 if event.type == "content_block_delta":
                     if event.delta.type == "text_delta":
-                        yield event.delta.text
+                        yield {"type": "text", "text": event.delta.text}
                     elif event.delta.type == "thinking_delta":
                         wrapper._thinking_parts.append(event.delta.thinking)
+                        yield {"type": "thinking", "text": event.delta.thinking}
         wrapper._finalize()
 
     wrapper = ThinkingStream(_generate())

@@ -7,22 +7,24 @@
  * Single toggle. Two states. That's it.
  */
 
-export default function ModeToggle({ mode, onChange }) {
+export default function ModeToggle({ mode, onChange, disabled }) {
   const isOverdrive = mode === "overdrive";
 
   return (
     <button
-      onClick={() => onChange(isOverdrive ? "regular" : "overdrive")}
+      onClick={() => !disabled && onChange(isOverdrive ? "regular" : "overdrive")}
+      title={disabled ? "Locked for this conversation" : ""}
       style={{
         padding: "6px 14px",
         borderRadius: 16,
-        border: `1.5px solid ${isOverdrive ? "#EF4444" : "#27272A"}`,
-        background: isOverdrive ? "#EF444415" : "transparent",
-        color: isOverdrive ? "#FCA5A5" : "#71717A",
+        border: `1.5px solid ${disabled ? "#27272a" : isOverdrive ? "#EF4444" : "#27272A"}`,
+        background: disabled ? "transparent" : isOverdrive ? "#EF444415" : "transparent",
+        color: disabled ? "#52525b" : isOverdrive ? "#FCA5A5" : "#71717A",
         fontFamily: "inherit",
         fontSize: 11,
         fontWeight: 600,
-        cursor: "pointer",
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.6 : 1,
         letterSpacing: "0.04em",
         transition: "all 0.2s",
         whiteSpace: "nowrap",

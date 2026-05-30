@@ -11,9 +11,8 @@ import logging
 from datetime import datetime
 from sqlmodel import Session, select
 
-import anthropic
-
-from ..config import ANTHROPIC_API_KEY
+from ..config import REGULAR_MODELS, AUTODREAM_MODEL_KEY
+from ..prompts import DREAM_PROMPT, DREAM_SYSTEM_PROMPT
 from ..models import DreamLog, MemoryFile, Conversation, Message
 
 logger = logging.getLogger("roundtable.autodream")
@@ -21,59 +20,6 @@ logger = logging.getLogger("roundtable.autodream")
 MAX_TRANSCRIPT_CHARS = 60000  # ~15K tokens
 MEMORY_CAP_CHARS = 25000
 MEMORY_CAP_LINES = 200
-
-DREAM_PROMPT = """You are a memory consolidation agent performing a "dream pass" — reviewing recent conversation transcripts to update a user's persistent memory files.
-
-## Current memory state
-Total size: {total_chars} chars, {total_lines} lines across {num_topics} topic files.
-
-{topic_sections}
-
-## Recent conversation transcripts
-{transcripts}
-
-## Your job
-
-Phase 1 — GATHER: Identify NEW durable facts from the transcripts. Look for: preferences, decisions, project updates, relationship changes, completed tasks, new skills, new contacts, schedule changes. Do NOT extract: greetings, transient debugging, small talk, questions fully resolved in-conversation.
-
-Phase 2 — CONSOLIDATE: Identify information in existing topic files that should be updated based on the transcripts. Merge related observations rather than keeping both. Examples:
-- "user might prefer X" + transcript confirms X → replace old entry with confirmed fact
-- "project status: planning" + transcript shows it shipped → update to shipped
-- Convert vague insights into concrete facts where transcripts support it
-
-Phase 3 — PRUNE: Identify stale, duplicated, or contradicted entries across topic files that should be removed or merged.
-
-## Output format
-
-Output a JSON object with this exact structure:
-{{
-  "additions": [
-    {{"topic": "projects", "content": "text to append", "reason": "why"}},
-  ],
-  "updates": [
-    {{"topic": "thesis", "old_content": "exact substring to replace", "new_content": "replacement text", "reason": "why"}}
-  ],
-  "deletions": [
-    {{"topic": "projects", "content": "exact substring to remove", "reason": "why"}}
-  ],
-  "summary": "2-3 sentence summary of what changed and why",
-  "no_changes_needed": false
-}}
-
-## Constraints
-
-- HARD CAP: Total memory across all topic files must stay under {cap_chars} chars / {cap_lines} lines. Current: {total_chars} chars, {total_lines} lines. If adding new content would exceed this, you MUST also propose deletions or merges to stay under the cap.
-- Never reduce any single topic file by more than 50% in one dream pass. If a topic needs heavy pruning, flag it in the summary and spread the work across multiple passes.
-- Merge related observations rather than keeping duplicates.
-- Convert vague insights into concrete facts where the transcripts support it.
-- Memory is a hint system, not a source of truth. Do not consolidate speculative or uncertain information as if it were confirmed.
-- Be conservative. Only propose changes you're confident about. When in doubt, leave it alone. The user will review every proposed change before it's applied.
-- Use exact substrings for old_content in updates and content in deletions — the apply step does literal string matching.
-- Output ONLY the JSON object. No markdown fences, no explanation outside the JSON."""
-
-
-def _get_client():
-    return anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
 
 
 def _format_transcripts(conversations: list[Conversation], messages_by_conv: dict[int, list[Message]]) -> str:
@@ -110,6 +56,21 @@ async def generate_dream(
 
     Returns {"dream_id": int, "proposed_changes": dict, "summary": str, "error": str|None}
     """
+    # Clear stale pending dreams (older than 30 minutes)
+    from datetime import datetime, timedelta
+    stale_cutoff = datetime.utcnow() - timedelta(minutes=30)
+    stale_dreams = session.exec(
+        select(DreamLog)
+        .where(DreamLog.status == "pending")
+        .where(DreamLog.created_at < stale_cutoff)
+    ).all()
+    for sd in stale_dreams:
+        sd.status = "failed"
+        sd.summary = "Consolidation pass timed out (stale check)"
+        session.add(sd)
+    if stale_dreams:
+        session.commit()
+
     # --- Acquire consolidation lock ---
     pending = session.exec(
         select(DreamLog).where(DreamLog.status == "pending")
@@ -181,10 +142,11 @@ async def generate_dream(
 
         conv_ids = [c.id for c in conversations]
 
-        # Load all messages for these conversations
+        # Load all messages for these conversations (excluding errors)
         all_messages = session.exec(
             select(Message)
             .where(Message.conversation_id.in_(conv_ids))  # type: ignore
+            .where(Message.is_error == False)  # noqa: E712
             .order_by(Message.created_at)  # type: ignore
         ).all()
 
@@ -201,7 +163,7 @@ async def generate_dream(
             session.commit()
             return {"error": "No message content to process", "dream_id": dream.id}
 
-        # --- Consolidate + Prune: call Claude ---
+        # --- Consolidate + Prune: call Dynamic Client ---
         prompt = DREAM_PROMPT.format(
             total_chars=total_chars,
             total_lines=total_lines,
@@ -212,23 +174,26 @@ async def generate_dream(
             cap_lines=MEMORY_CAP_LINES,
         )
 
-        client = _get_client()
-        response = await client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=4096,
-            system="You are a memory consolidation agent. Output only valid JSON.",
-            messages=[{"role": "user", "content": prompt}],
-        )
+        # Resolve dynamic client to avoid circular imports
+        from ..llm.router import CLIENTS
+        config = REGULAR_MODELS[AUTODREAM_MODEL_KEY]
+        client = CLIENTS[config.provider]
+        system_prompt = DREAM_SYSTEM_PROMPT
 
-        # Parse response
-        raw_text = response.content[0].text.strip()
+        temp_messages = [{"role": "user", "model": "user", "name": "Jack", "content": prompt}]
+        formatted = client.format_history(temp_messages, AUTODREAM_MODEL_KEY)
+
+        raw_text = await client.call(formatted, config, system_prompt)
+        raw_text = raw_text.strip()
+
         # Strip markdown fences if present
         if raw_text.startswith("```"):
             raw_text = raw_text.split("\n", 1)[1] if "\n" in raw_text else raw_text[3:]
             if raw_text.endswith("```"):
                 raw_text = raw_text[:-3].strip()
 
-        token_cost = (response.usage.input_tokens or 0) + (response.usage.output_tokens or 0)
+        # Estimate token cost
+        token_cost = (len(prompt) + len(raw_text)) // 4
 
         try:
             proposed = json.loads(raw_text)
@@ -311,6 +276,48 @@ def apply_dream_changes(
         session.add(dream)
         session.commit()
         return {"status": "rejected", "applied": 0, "skipped": 0}
+
+    # Simulate and check memory cap before applying
+    all_topics = session.exec(
+        select(MemoryFile).where(MemoryFile.file_type == "topic")
+    ).all()
+    simulated_content = {f.key: f.content for f in all_topics}
+
+    for idx in approved_indices:
+        if idx < 0 or idx >= len(all_changes):
+            continue
+        change = all_changes[idx]
+        topic_key = change.get("topic")
+        if topic_key not in simulated_content:
+            continue
+        current = simulated_content[topic_key]
+        if change["type"] == "add":
+            simulated_content[topic_key] = current.rstrip() + "\n\n" + change["content"]
+        elif change["type"] == "update":
+            old = change.get("old_content", "")
+            new = change.get("new_content", "")
+            if old and old in current:
+                simulated_content[topic_key] = current.replace(old, new, 1)
+        elif change["type"] == "delete":
+            content = change.get("content", "")
+            if content and content in current:
+                current_replaced = current.replace(content, "", 1)
+                while "\n\n\n" in current_replaced:
+                    current_replaced = current_replaced.replace("\n\n\n", "\n\n")
+                simulated_content[topic_key] = current_replaced
+
+    total_chars = sum(len(content) for content in simulated_content.values())
+    total_lines = sum(content.count("\n") + 1 for content in simulated_content.values())
+
+    if total_chars > MEMORY_CAP_CHARS or total_lines > MEMORY_CAP_LINES:
+        dream.status = "failed"
+        dream.summary = f"Aborted: applying approved changes would exceed memory cap: {total_chars} chars / {total_lines} lines (cap: {MEMORY_CAP_CHARS} / {MEMORY_CAP_LINES})"
+        session.add(dream)
+        session.commit()
+        return {
+            "error": f"Applying these changes would exceed memory cap: {total_chars} chars / {total_lines} lines (cap: {MEMORY_CAP_CHARS} / {MEMORY_CAP_LINES})",
+            "dream_id": dream_id
+        }
 
     applied = []
     skipped = []

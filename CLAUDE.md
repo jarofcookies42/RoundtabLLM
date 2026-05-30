@@ -22,14 +22,15 @@ A self-hosted multi-LLM deliberation engine with a scalable memory architecture.
 - **Phase 4B:** AutoDream memory consolidation — Claude-powered dream passes with user-reviewed diffs
 - **Phase 4C:** Context provenance tagging — source + trust_tier on every message and memory file
 - **Phase 4D:** Compaction pipeline — auto-summarize old messages when context exceeds 30K tokens
+- **Forced Dissent mode** — inject "you MUST disagree" into system prompts
+- **Per-model thinking/reasoning overrides** — settings panel to override temperature, thinking level, reasoning effort, and budget tokens per model from the UI
 - **Core:** All four model clients, mode/anchor switching, import pipeline, auth, deploy config, static file serving, Railway persistent volume
 
 ### Future Work
 - **Phase 5 — Imports:** Full import pipeline for ChatGPT/Gemini/Claude exports with conversation replay
-- **Forced Dissent mode** — inject "you MUST disagree" into system prompts
 - **Divergence Heatmap** — semantic similarity tracking between model responses per round
 - **Chain-of-Thought Leakage Monitor** — detect when thinking_content themes bleed into visible responses
-- **Per-model thinking/reasoning sliders** — let user override thinking_level, reasoning_effort, and thinking.budget_tokens per model from the UI
+- **Web Research feature** — let models search the web to look up recent facts (Google Search API / Search Tool integration)
 
 ## Memory Architecture (Phase 4)
 
@@ -85,7 +86,7 @@ Toggled by a single switch in the UI header:
 ### Maximum Overdrive (~$0.15-0.40/round)
 | Model | Config |
 |-------|--------|
-| Claude Opus 4.6 | `thinking: {type: "adaptive"}`, `max_tokens: 32000` |
+| Claude Opus 4.7 | `thinking: {type: "adaptive"}`, `max_tokens: 32000` |
 | GPT-5.4 | `reasoning_effort: "high"`, `verbosity: "high"`, `max_tokens: 2048` |
 | Gemini 3.1 Pro | `temperature: 1.0`, `thinking_level: "high"` (Deep Think Mini), `top_p: 0.95`, `max_tokens: 4096` |
 | Grok 4.20 (`grok-4.20-reasoning`) | `temperature: 0.9`, `max_tokens: 2048` |
@@ -256,4 +257,4 @@ AUTH_TOKEN=some-random-string-for-simple-auth
 
 ## Built With
 
-This application was built entirely by Claude Code. All four models (Claude Sonnet/Opus 4.6, GPT-5.4, Gemini 3.1 Pro, Grok 4.20) are used as participants in the roundtable.
+This application was built entirely by Claude Code. All four models (Claude Sonnet/Opus 4.7, GPT-5.4, Gemini 3.1 Pro, Grok 4.20) are used as participants in the roundtable.

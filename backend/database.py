@@ -1,10 +1,21 @@
 """SQLite database setup and initialization."""
 import os
 from sqlmodel import SQLModel, Session, create_engine, select
+from sqlalchemy import event
 from .config import DATABASE_URL
 from .models import ContextDoc, MemoryFile
 
-engine = create_engine(DATABASE_URL, echo=False)
+connect_args = {"check_same_thread": False, "timeout": 30} if DATABASE_URL.startswith("sqlite") else {}
+engine = create_engine(DATABASE_URL, echo=False, connect_args=connect_args)
+
+
+@event.listens_for(engine, "connect")
+def set_sqlite_pragma(dbapi_connection, connection_record):
+    if DATABASE_URL.startswith("sqlite"):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.close()
 
 
 def _migrate(engine):
@@ -44,6 +55,10 @@ def _migrate(engine):
             conn.execute(sqlalchemy.text("ALTER TABLE conversation ADD COLUMN context_mode TEXT DEFAULT 'full'"))
         if "selected_topics" not in conv_columns:
             conn.execute(sqlalchemy.text("ALTER TABLE conversation ADD COLUMN selected_topics TEXT"))
+        if "archived" not in conv_columns:
+            conn.execute(sqlalchemy.text("ALTER TABLE conversation ADD COLUMN archived BOOLEAN DEFAULT 0"))
+        if "forced_dissent" not in conv_columns:
+            conn.execute(sqlalchemy.text("ALTER TABLE conversation ADD COLUMN forced_dissent BOOLEAN DEFAULT 0"))
 
         conn.commit()
 

@@ -97,12 +97,20 @@ def get_relevant_context(
     return assembled, [k for k, _ in loaded_topics]
 
 
+FORCED_DISSENT_PROMPT = """
+---
+[CRITICAL PROTOCOL CONSTRAINT: FORCED DISSENT]
+You MUST critically evaluate and explicitly disagree with or challenge at least one major point or assumption made by the other models or in the conversation history so far. Do not simply agree or echo prior responses. Highlight points of divergence, potential flaws, counter-evidence, or alternative perspectives. Be constructive but firm in your dissent.
+"""
+
+
 def build_system_prompt(
     context_content: str,
     mode: str,
     model_name: str,
     protocol: str = "roundtable",
     protocol_role_prompt: str = "",
+    forced_dissent: bool = False,
 ) -> str:
     """
     Build the full system prompt for a model.
@@ -113,6 +121,7 @@ def build_system_prompt(
         model_name: Display name of this model (e.g. "Claude Sonnet 4.6")
         protocol: "roundtable", "blind", or "debate"
         protocol_role_prompt: Additional role-specific prompt for synthesis/critic/arbiter
+        forced_dissent: If True, appends constraints requiring the model to disagree/challenge.
     """
     if protocol == "blind":
         instructions = BLIND_INSTRUCTIONS.format(model_name=model_name)
@@ -138,6 +147,9 @@ Current mode: {mode_label}"""
 
     if protocol_role_prompt:
         prompt += f"\n\n---\n{protocol_role_prompt}"
+
+    if forced_dissent and not any(w in protocol_role_prompt.lower() for w in ["synthesis", "synthesizer", "arbiter", "synthesize"]):
+        prompt += FORCED_DISSENT_PROMPT
 
     return prompt
 
