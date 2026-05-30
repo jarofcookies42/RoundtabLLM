@@ -28,6 +28,7 @@ import { sendMessage, exportConversation, getConversation, deleteMessage } from 
 import ConversationSidebar from "./components/ConversationSidebar";
 import ModelSettingsPanel from "./components/ModelSettingsPanel";
 import DissentToggle from "./components/DissentToggle";
+import RoutingToggle from "./components/RoutingToggle";
 
 const TABS = [
   { id: "chat", label: "Chat" },
@@ -46,15 +47,39 @@ export default function App() {
   const [authed, setAuthed] = useState(!!localStorage.getItem("roundtable_token"));
   const [tokenInput, setTokenInput] = useState("");
   const [messages, setMessages] = useState([]);
-  const [mode, setMode] = useState("regular");
-  const [anchor, setAnchor] = useState("knowledge");
-  const [enabledModels, setEnabledModels] = useState(["claude", "gpt", "gemini", "grok"]);
+  const [sessionConfig, setSessionConfig] = useState({
+    mode: "regular",
+    protocol: "roundtable",
+    anchor: "knowledge",
+    participants: ["claude", "gpt", "gemini", "grok"],
+    context_mode: "full",
+    selected_topics: [],
+    forced_dissent: false,
+    routing_enabled: false,
+  });
+  const [routingRationale, setRoutingRationale] = useState(null);
+
+  const mode = sessionConfig.mode;
+  const anchor = sessionConfig.anchor;
+  const enabledModels = sessionConfig.participants;
+  const protocol = sessionConfig.protocol;
+  const contextMode = sessionConfig.context_mode;
+  const selectedTopics = sessionConfig.selected_topics;
+  const forcedDissent = sessionConfig.forced_dissent;
+  const routingEnabled = sessionConfig.routing_enabled;
+
+  const setMode = (val) => setSessionConfig(prev => ({ ...prev, mode: val }));
+  const setAnchor = (val) => setSessionConfig(prev => ({ ...prev, anchor: val }));
+  const setProtocol = (val) => setSessionConfig(prev => ({ ...prev, protocol: val }));
+  const setEnabledModels = (val) => setSessionConfig(prev => ({ ...prev, participants: typeof val === 'function' ? val(prev.participants) : val }));
+  const setContextMode = (val) => setSessionConfig(prev => ({ ...prev, context_mode: val }));
+  const setSelectedTopics = (val) => setSessionConfig(prev => ({ ...prev, selected_topics: typeof val === 'function' ? val(prev.selected_topics) : val }));
+  const setForcedDissent = (val) => setSessionConfig(prev => ({ ...prev, forced_dissent: val }));
+  const setRoutingEnabled = (val) => setSessionConfig(prev => ({ ...prev, routing_enabled: val }));
+
   const [activeModel, setActiveModel] = useState(null);
   const [sending, setSending] = useState(false);
-  const [protocol, setProtocol] = useState("roundtable");
   const [debateRoles, setDebateRoles] = useState({});
-  const [contextMode, setContextMode] = useState("full");
-  const [selectedTopics, setSelectedTopics] = useState([]);
   const [loadedTopics, setLoadedTopics] = useState([]);
   const [contextTokens, setContextTokens] = useState(0);
   const [contextLimit, setContextLimit] = useState(30000);
@@ -72,7 +97,6 @@ export default function App() {
     grok: {},
     ollama: {},
   });
-  const [forcedDissent, setForcedDissent] = useState(false);
 
   useEffect(() => {
     conversationIdRef.current = conversationId;
@@ -83,16 +107,25 @@ export default function App() {
       const data = await getConversation(id);
       const conv = data.conversation;
       setConversationId(conv.id);
-      setProtocol(conv.protocol || "roundtable");
-      setMode(conv.mode || "regular");
-      setAnchor(conv.anchor || "knowledge");
-      setContextMode(conv.context_mode || "full");
-      setSelectedTopics(conv.selected_topics ? JSON.parse(conv.selected_topics) : []);
-      setForcedDissent(conv.forced_dissent || false);
+      if (conv.config) {
+        setSessionConfig(conv.config);
+      } else {
+        setSessionConfig({
+          mode: conv.mode || "regular",
+          protocol: conv.protocol || "roundtable",
+          anchor: conv.anchor || "knowledge",
+          participants: ["claude", "gpt", "gemini", "grok"],
+          context_mode: conv.context_mode || "full",
+          selected_topics: conv.selected_topics ? JSON.parse(conv.selected_topics) : [],
+          forced_dissent: conv.forced_dissent || false,
+          routing_enabled: false,
+        });
+      }
       setMessages(data.messages || []);
       setLoadedTopics([]);
       setContextTokens(0);
       setCompactionNotice(null);
+      setRoutingRationale(null);
     } catch (err) {
       console.error("Failed to load conversation:", err);
     }
@@ -106,7 +139,17 @@ export default function App() {
     setLoadedTopics([]);
     setContextTokens(0);
     setCompactionNotice(null);
-    setForcedDissent(false);
+    setRoutingRationale(null);
+    setSessionConfig({
+      mode: "regular",
+      protocol: "roundtable",
+      anchor: "knowledge",
+      participants: ["claude", "gpt", "gemini", "grok"],
+      context_mode: "full",
+      selected_topics: [],
+      forced_dissent: false,
+      routing_enabled: false,
+    });
   }, []);
 
   const { startStream, stopStream } = useSSE({
@@ -211,6 +254,9 @@ export default function App() {
       
       setTimeout(() => inputRef.current?.focus(), 100);
     },
+    onRoutingChosen: (data) => {
+      setRoutingRationale(data);
+    },
   });
 
   // --- Anchor order for display ---
@@ -248,6 +294,7 @@ export default function App() {
     if (!text.trim() || sending) return;
     setSending(true);
     setLoadedTopics([]);
+    setRoutingRationale(null);
 
     const userMsg = {
       role: "user", model: "user", name: "Jack",
@@ -259,12 +306,8 @@ export default function App() {
       const res = await sendMessage({
         message: text.trim(),
         conversation_id: conversationId,
-        mode, anchor, protocol,
-        enabled_models: enabledModels,
+        config: sessionConfig,
         debate_roles: protocol === "debate" ? effectiveDebateRoles : undefined,
-        context_mode: contextMode,
-        selected_topics: contextMode === "select" ? selectedTopics : undefined,
-        forced_dissent: forcedDissent,
       });
 
       const isNew = !conversationId;
@@ -281,21 +324,15 @@ export default function App() {
       }
 
       startStream(res.conversation_id, {
-        mode: res.mode,
-        anchor: res.anchor,
-        protocol: res.protocol,
-        enabled_models: enabledModels,
+        config: res.config || sessionConfig,
         debate_roles: res.protocol === "debate" ? effectiveDebateRoles : undefined,
-        context_mode: contextMode,
-        selected_topics: contextMode === "select" ? selectedTopics : undefined,
         model_overrides: activeOverrides,
-        forced_dissent: res.forced_dissent || forcedDissent,
       });
     } catch (err) {
       setSending(false);
       console.error("Send failed:", err);
     }
-  }, [sending, conversationId, mode, anchor, protocol, enabledModels, effectiveDebateRoles, contextMode, selectedTopics, modelOverrides, forcedDissent, startStream]);
+  }, [sending, conversationId, sessionConfig, effectiveDebateRoles, modelOverrides, startStream]);
 
   const handleStop = useCallback(() => {
     stopStream();
@@ -446,6 +483,7 @@ export default function App() {
           <ModeToggle mode={mode} onChange={setMode} disabled={conversationId !== null} />
           <AnchorToggle anchor={anchor} onChange={setAnchor} disabled={conversationId !== null} />
           <DissentToggle enabled={forcedDissent} onChange={setForcedDissent} disabled={conversationId !== null} />
+          <RoutingToggle enabled={routingEnabled} onChange={setRoutingEnabled} disabled={conversationId !== null} />
         </div>
 
         {/* Model chips */}
@@ -550,7 +588,8 @@ export default function App() {
             <ChatView messages={messages} activeModel={activeModel} anchorModel={anchorModel}
               sending={sending} onSend={handleSend} onRegenerate={handleRegenerate} onStop={handleStop}
               inputRef={inputRef} enabledModels={enabledModels}
-              contextTokens={contextTokens} contextLimit={contextLimit} compactionNotice={compactionNotice} />
+              contextTokens={contextTokens} contextLimit={contextLimit} compactionNotice={compactionNotice}
+              routingRationale={routingRationale} />
           )}
           {tab === "context" && (
             <ContextEditor

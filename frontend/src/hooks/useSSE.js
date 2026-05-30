@@ -12,28 +12,32 @@
  */
 import { useRef, useCallback } from "react";
 
-export default function useSSE({ onModelStart, onToken, onThinkingToken, onModelDone, onModelError, onContextLoaded, onCompaction, onRoundDone }) {
+export default function useSSE({ onModelStart, onToken, onThinkingToken, onModelDone, onModelError, onContextLoaded, onCompaction, onRoundDone, onRoutingChosen }) {
   const sourceRef = useRef(null);
 
-  const startStream = useCallback((conversationId, { mode, anchor, protocol, enabled_models, debate_roles, context_mode, selected_topics, model_overrides }) => {
+  const startStream = useCallback((conversationId, { config, mode, anchor, protocol, enabled_models, debate_roles, context_mode, selected_topics, model_overrides }) => {
     if (sourceRef.current) {
       sourceRef.current.close();
     }
 
     const token = localStorage.getItem("roundtable_token") || "";
-    const params = new URLSearchParams({
-      mode,
-      anchor,
-      protocol: protocol || "roundtable",
-      enabled_models: enabled_models.join(","),
-      context_mode: context_mode || "full",
-      token,
-    });
+    const params = new URLSearchParams({ token });
+
+    if (config) {
+      params.set("config", JSON.stringify(config));
+    } else {
+      if (mode) params.set("mode", mode);
+      if (anchor) params.set("anchor", anchor);
+      if (protocol) params.set("protocol", protocol);
+      if (enabled_models) params.set("enabled_models", enabled_models.join(","));
+      if (context_mode) params.set("context_mode", context_mode);
+      if (selected_topics && selected_topics.length > 0) {
+        params.set("selected_topics", JSON.stringify(selected_topics));
+      }
+    }
+
     if (debate_roles) {
       params.set("debate_roles", JSON.stringify(debate_roles));
-    }
-    if (selected_topics && selected_topics.length > 0) {
-      params.set("selected_topics", JSON.stringify(selected_topics));
     }
     if (model_overrides) {
       params.set("model_overrides", JSON.stringify(model_overrides));
@@ -48,6 +52,9 @@ export default function useSSE({ onModelStart, onToken, onThinkingToken, onModel
         const data = JSON.parse(event.data);
 
         switch (data.type) {
+          case "routing_chosen":
+            onRoutingChosen?.(data);
+            break;
           case "compaction":
             onCompaction?.(data);
             break;

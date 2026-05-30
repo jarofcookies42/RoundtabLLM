@@ -22,7 +22,7 @@ import dataclasses
 from typing import AsyncGenerator
 from sqlmodel import Session, select
 
-from ..config import get_active_config, ModelConfig
+from ..config import get_active_config, ModelConfig, SessionConfig
 from ..models import Message, Conversation
 from ..context import build_system_prompt, get_relevant_context, PROTOCOL_PROMPTS
 from ..memory.compaction import compact_conversation, should_compact, estimate_tokens
@@ -87,20 +87,45 @@ def _resolve_context(
 async def run_round(
     conversation_id: int,
     user_message: str,
-    mode: str,
-    anchor: str,
-    enabled_models: list[str],
+    config: SessionConfig,
     context_content: str,
     session: Session,
-    context_mode: str = "full",
-    selected_topics: list[str] | None = None,
     model_overrides: dict | None = None,
-    forced_dissent: bool = False,
 ) -> AsyncGenerator[str, None]:
     """
-    Execute a full round-robin and yield SSE events.
+    Execute a full roundtable and yield SSE events.
     """
-    models, order = get_active_config(mode, anchor, enabled_models)
+    # 1. Routing classification and selection
+    active_participants = config.participants
+    category = "writing"
+    if config.routing_enabled:
+        from ..routing.classifier import classify_prompt
+        from ..routing.selector import select_models
+        
+        classification = await classify_prompt(user_message)
+        category = classification.get("category", "writing")
+        complexity = classification.get("complexity", "medium")
+        explanation = classification.get("explanation", "")
+        
+        selected_keys, rationale = select_models(
+            session=session,
+            category=category,
+            mode=config.mode,
+            anchor_mode=config.anchor,
+            enabled_models=config.participants
+        )
+        active_participants = selected_keys
+        
+        yield _sse({
+            "type": "routing_chosen",
+            "category": category,
+            "complexity": complexity,
+            "explanation": explanation,
+            "selected_models": selected_keys,
+            "rationale": rationale
+        })
+
+    models, order = get_active_config(config.mode, config.anchor, active_participants)
     models = _apply_overrides(models, model_overrides)
 
     # Auto-compact if context pressure is high
@@ -117,25 +142,28 @@ async def run_round(
 
     # Resolve context via memory-as-hint system
     resolved_context, loaded_topics = _resolve_context(
-        user_message, round_messages, context_mode, selected_topics, session,
+        user_message, round_messages, config.context_mode, config.selected_topics, session,
     )
     effective_context = resolved_context if resolved_context is not None else context_content
 
     yield _sse({"type": "context_loaded", "topics": loaded_topics})
 
+    proposals_dict = {}
+    synthesis_content = ""
+
     for model_key in order:
-        config = models[model_key]
-        client = CLIENTS[config.provider]
+        model_config = models[model_key]
+        client = CLIENTS[model_config.provider]
         system_prompt = build_system_prompt(
-            effective_context, mode, config.display_name, forced_dissent=forced_dissent
+            effective_context, config.mode, model_config.display_name, forced_dissent=config.forced_dissent
         )
 
-        yield _sse({"type": "model_start", "model": model_key, "name": config.display_name})
+        yield _sse({"type": "model_start", "model": model_key, "name": model_config.display_name})
 
         try:
             formatted = client.format_history(round_messages, model_key)
             full_response = ""
-            stream = client.call_stream(formatted, config, system_prompt)
+            stream = client.call_stream(formatted, model_config, system_prompt)
             async for is_thinking, delta in _read_stream(stream):
                 if is_thinking:
                     yield _sse({"type": "thinking_token", "model": model_key, "delta": delta})
@@ -145,13 +173,18 @@ async def run_round(
 
             thinking_content = getattr(stream, "thinking_content", None)
 
-            _save_msg(session, conversation_id, model_key, config.display_name,
+            _save_msg(session, conversation_id, model_key, model_config.display_name,
                       full_response, thinking_content=thinking_content)
 
             round_messages.append({
                 "role": "assistant", "model": model_key,
-                "name": config.display_name, "content": full_response,
+                "name": model_config.display_name, "content": full_response,
             })
+
+            if model_key != order[-1]:
+                proposals_dict[model_key] = full_response
+            else:
+                synthesis_content = full_response
 
             yield _sse({"type": "model_done", "model": model_key, "content": full_response})
 
@@ -166,8 +199,26 @@ async def run_round(
                 "error_details": err_details
             })
 
-            _save_msg(session, conversation_id, model_key, config.display_name,
+            _save_msg(session, conversation_id, model_key, model_config.display_name,
                       f"⚠ Error: {error_msg}", is_error=True)
+
+    # Post-round outcome evaluator trigger
+    if config.routing_enabled and len(order) >= 2 and synthesis_content and proposals_dict:
+        from ..database import engine
+        from sqlmodel import Session as SQLSession
+        from ..routing.ledger import evaluate_and_log_outcomes
+        
+        async def run_eval_bg():
+            with SQLSession(engine) as bg_session:
+                await evaluate_and_log_outcomes(
+                    session=bg_session,
+                    conversation_id=conversation_id,
+                    category=category,
+                    user_message=user_message,
+                    proposals=proposals_dict,
+                    synthesis_content=synthesis_content
+                )
+        asyncio.create_task(run_eval_bg())
 
     ctx_tokens = estimate_tokens(round_messages)
     yield _sse({"type": "round_done", "context_tokens": ctx_tokens, "context_limit": 30000})
@@ -180,26 +231,53 @@ async def run_round(
 async def run_blind(
     conversation_id: int,
     user_message: str,
-    mode: str,
-    anchor: str,
-    enabled_models: list[str],
+    config: SessionConfig,
     context_content: str,
     session: Session,
-    context_mode: str = "full",
-    selected_topics: list[str] | None = None,
     model_overrides: dict | None = None,
-    forced_dissent: bool = False,
 ) -> AsyncGenerator[str, None]:
     """All models answer independently in parallel (blind), then the anchor synthesizes."""
-    models, order = get_active_config(mode, anchor, enabled_models)
+    # 1. Routing classification and selection
+    active_participants = config.participants
+    category = "writing"
+    if config.routing_enabled:
+        from ..routing.classifier import classify_prompt
+        from ..routing.selector import select_models
+        
+        classification = await classify_prompt(user_message)
+        category = classification.get("category", "writing")
+        complexity = classification.get("complexity", "medium")
+        explanation = classification.get("explanation", "")
+        
+        selected_keys, rationale = select_models(
+            session=session,
+            category=category,
+            mode=config.mode,
+            anchor_mode=config.anchor,
+            enabled_models=config.participants
+        )
+        active_participants = selected_keys
+        
+        yield _sse({
+            "type": "routing_chosen",
+            "category": category,
+            "complexity": complexity,
+            "explanation": explanation,
+            "selected_models": selected_keys,
+            "rationale": rationale
+        })
+
+    models, order = get_active_config(config.mode, config.anchor, active_participants)
     models = _apply_overrides(models, model_overrides)
 
     if len(order) < 2:
         async for event in run_round(
-            conversation_id, user_message, mode, anchor,
-            enabled_models, context_content, session,
-            context_mode=context_mode, selected_topics=selected_topics,
-            model_overrides=model_overrides, forced_dissent=forced_dissent,
+            conversation_id=conversation_id,
+            user_message=user_message,
+            config=config,
+            context_content=context_content,
+            session=session,
+            model_overrides=model_overrides,
         ):
             yield event
         return
@@ -214,7 +292,7 @@ async def run_blind(
         history.append({"role": "user", "model": "user", "name": "Jack", "content": user_message})
 
     resolved_context, loaded_topics = _resolve_context(
-        user_message, history, context_mode, selected_topics, session,
+        user_message, history, config.context_mode, config.selected_topics, session,
     )
     effective_context = resolved_context if resolved_context is not None else context_content
     yield _sse({"type": "context_loaded", "topics": loaded_topics})
@@ -226,22 +304,22 @@ async def run_blind(
     results: dict[str, dict] = {}
 
     async def _stream_model(model_key: str):
-        config = models[model_key]
-        client = CLIENTS[config.provider]
+        model_config = models[model_key]
+        client = CLIENTS[model_config.provider]
         system_prompt = build_system_prompt(
-            effective_context, mode, config.display_name, protocol="blind",
-            forced_dissent=forced_dissent,
+            effective_context, config.mode, model_config.display_name, protocol="blind",
+            forced_dissent=config.forced_dissent,
         )
 
         await event_queue.put(_sse({
-            "type": "model_start", "model": model_key, "name": config.display_name,
+            "type": "model_start", "model": model_key, "name": model_config.display_name,
             "protocol_role": "proposal",
         }))
 
         try:
             formatted = client.format_history(history, model_key)
             full_response = ""
-            stream = client.call_stream(formatted, config, system_prompt)
+            stream = client.call_stream(formatted, model_config, system_prompt)
             async for is_thinking, delta in _read_stream(stream):
                 if is_thinking:
                     await event_queue.put(_sse({"type": "thinking_token", "model": model_key, "delta": delta}))
@@ -252,7 +330,7 @@ async def run_blind(
             thinking_content = getattr(stream, "thinking_content", None)
             results[model_key] = {"content": full_response, "thinking": thinking_content, "error": False}
 
-            _save_msg(session, conversation_id, model_key, config.display_name,
+            _save_msg(session, conversation_id, model_key, model_config.display_name,
                       full_response, thinking_content=thinking_content, protocol_role="proposal")
 
             await event_queue.put(_sse({
@@ -270,7 +348,7 @@ async def run_blind(
                 "error": error_msg,
                 "error_details": err_details
             }))
-            _save_msg(session, conversation_id, model_key, config.display_name,
+            _save_msg(session, conversation_id, model_key, model_config.display_name,
                       f"⚠ Error: {error_msg}", is_error=True, protocol_role="proposal")
 
     tasks = [asyncio.create_task(_stream_model(k)) for k in independent_keys]
@@ -306,9 +384,9 @@ async def run_blind(
     )
 
     synthesis_system = build_system_prompt(
-        effective_context, mode, anchor_config.display_name,
+        effective_context, config.mode, anchor_config.display_name,
         protocol="blind", protocol_role_prompt=PROTOCOL_PROMPTS["synthesis"],
-        forced_dissent=forced_dissent,
+        forced_dissent=config.forced_dissent,
     )
 
     yield _sse({
@@ -354,6 +432,27 @@ async def run_blind(
         _save_msg(session, conversation_id, anchor_key, anchor_config.display_name,
                   f"⚠ Error: {error_msg}", is_error=True, protocol_role="synthesis")
 
+    # Post-round outcome evaluator trigger
+    if config.routing_enabled and len(order) >= 2:
+        proposals_dict = {k: r["content"] for k, r in results.items() if k != order[-1] and not r.get("error")}
+        synthesis_content = full_response
+        if proposals_dict and synthesis_content:
+            from ..database import engine
+            from sqlmodel import Session as SQLSession
+            from ..routing.ledger import evaluate_and_log_outcomes
+            
+            async def run_eval_bg():
+                with SQLSession(engine) as bg_session:
+                    await evaluate_and_log_outcomes(
+                        session=bg_session,
+                        conversation_id=conversation_id,
+                        category=category,
+                        user_message=user_message,
+                        proposals=proposals_dict,
+                        synthesis_content=synthesis_content
+                    )
+            asyncio.create_task(run_eval_bg())
+
     ctx_tokens = estimate_tokens(history)
     yield _sse({"type": "round_done", "context_tokens": ctx_tokens, "context_limit": 30000})
 
@@ -365,30 +464,57 @@ async def run_blind(
 async def run_debate(
     conversation_id: int,
     user_message: str,
-    mode: str,
-    anchor: str,
-    enabled_models: list[str],
+    config: SessionConfig,
     context_content: str,
     session: Session,
     debate_roles: dict[str, str] | None = None,
-    context_mode: str = "full",
-    selected_topics: list[str] | None = None,
     model_overrides: dict | None = None,
-    forced_dissent: bool = False,
 ) -> AsyncGenerator[str, None]:
     """
     Debate protocol: proposers → critic (anonymized) → arbiter (full attribution).
     """
-    models, order = get_active_config(mode, anchor, enabled_models)
+    # 1. Routing classification and selection
+    active_participants = config.participants
+    category = "writing"
+    if config.routing_enabled:
+        from ..routing.classifier import classify_prompt
+        from ..routing.selector import select_models
+        
+        classification = await classify_prompt(user_message)
+        category = classification.get("category", "writing")
+        complexity = classification.get("complexity", "medium")
+        explanation = classification.get("explanation", "")
+        
+        selected_keys, rationale = select_models(
+            session=session,
+            category=category,
+            mode=config.mode,
+            anchor_mode=config.anchor,
+            enabled_models=config.participants
+        )
+        active_participants = selected_keys
+        
+        yield _sse({
+            "type": "routing_chosen",
+            "category": category,
+            "complexity": complexity,
+            "explanation": explanation,
+            "selected_models": selected_keys,
+            "rationale": rationale
+        })
+
+    models, order = get_active_config(config.mode, config.anchor, active_participants)
     models = _apply_overrides(models, model_overrides)
 
     if len(order) < 3:
         fallback = run_blind if len(order) >= 2 else run_round
         async for event in fallback(
-            conversation_id, user_message, mode, anchor,
-            enabled_models, context_content, session,
-            context_mode=context_mode, selected_topics=selected_topics,
-            model_overrides=model_overrides, forced_dissent=forced_dissent,
+            conversation_id=conversation_id,
+            user_message=user_message,
+            config=config,
+            context_content=context_content,
+            session=session,
+            model_overrides=model_overrides,
         ):
             yield event
         return
@@ -403,7 +529,7 @@ async def run_debate(
         history.append({"role": "user", "model": "user", "name": "Jack", "content": user_message})
 
     resolved_context, loaded_topics = _resolve_context(
-        user_message, history, context_mode, selected_topics, session,
+        user_message, history, config.context_mode, config.selected_topics, session,
     )
     effective_context = resolved_context if resolved_context is not None else context_content
     yield _sse({"type": "context_loaded", "topics": loaded_topics})
@@ -429,22 +555,22 @@ async def run_debate(
     proposals: dict[str, dict] = {}
 
     async def _stream_proposal(model_key: str):
-        config = models[model_key]
-        client = CLIENTS[config.provider]
+        model_config = models[model_key]
+        client = CLIENTS[model_config.provider]
         system_prompt = build_system_prompt(
-            effective_context, mode, config.display_name, protocol="blind",
-            forced_dissent=forced_dissent,
+            effective_context, config.mode, model_config.display_name, protocol="blind",
+            forced_dissent=config.forced_dissent,
         )
 
         await event_queue.put(_sse({
-            "type": "model_start", "model": model_key, "name": config.display_name,
+            "type": "model_start", "model": model_key, "name": model_config.display_name,
             "protocol_role": "proposal",
         }))
 
         try:
             formatted = client.format_history(history, model_key)
             full_response = ""
-            stream = client.call_stream(formatted, config, system_prompt)
+            stream = client.call_stream(formatted, model_config, system_prompt)
             async for is_thinking, delta in _read_stream(stream):
                 if is_thinking:
                     await event_queue.put(_sse({"type": "thinking_token", "model": model_key, "delta": delta}))
@@ -455,7 +581,7 @@ async def run_debate(
             thinking_content = getattr(stream, "thinking_content", None)
             proposals[model_key] = {"content": full_response, "thinking": thinking_content}
 
-            _save_msg(session, conversation_id, model_key, config.display_name,
+            _save_msg(session, conversation_id, model_key, model_config.display_name,
                       full_response, thinking_content=thinking_content, protocol_role="proposal")
 
             await event_queue.put(_sse({
@@ -473,7 +599,7 @@ async def run_debate(
                 "error": error_msg,
                 "error_details": err_details
             }))
-            _save_msg(session, conversation_id, model_key, config.display_name,
+            _save_msg(session, conversation_id, model_key, model_config.display_name,
                       f"⚠ Error: {error_msg}", is_error=True, protocol_role="proposal")
 
     tasks = [asyncio.create_task(_stream_proposal(k)) for k in proposer_keys]
@@ -509,9 +635,9 @@ async def run_debate(
         )
 
         critic_system = build_system_prompt(
-            effective_context, mode, critic_config.display_name,
+            effective_context, config.mode, critic_config.display_name,
             protocol="debate", protocol_role_prompt=PROTOCOL_PROMPTS["critic"],
-            forced_dissent=forced_dissent,
+            forced_dissent=config.forced_dissent,
         )
 
         yield _sse({
@@ -577,9 +703,9 @@ async def run_debate(
     arbiter_input = "\n\n---\n\n".join(arbiter_parts)
 
     arbiter_system = build_system_prompt(
-        effective_context, mode, arbiter_config.display_name,
+        effective_context, config.mode, arbiter_config.display_name,
         protocol="debate", protocol_role_prompt=arbiter_role_prompt,
-        forced_dissent=forced_dissent,
+        forced_dissent=config.forced_dissent,
     )
 
     yield _sse({
@@ -624,6 +750,27 @@ async def run_debate(
         })
         _save_msg(session, conversation_id, arbiter_key, arbiter_config.display_name,
                   f"⚠ Error: {error_msg}", is_error=True, protocol_role="synthesis")
+
+    # Post-round outcome evaluator trigger
+    if config.routing_enabled and len(order) >= 2:
+        proposals_dict = {k: v["content"] for k, v in proposals.items()}
+        synthesis_content = full_response
+        if proposals_dict and synthesis_content:
+            from ..database import engine
+            from sqlmodel import Session as SQLSession
+            from ..routing.ledger import evaluate_and_log_outcomes
+            
+            async def run_eval_bg():
+                with SQLSession(engine) as bg_session:
+                    await evaluate_and_log_outcomes(
+                        session=bg_session,
+                        conversation_id=conversation_id,
+                        category=category,
+                        user_message=user_message,
+                        proposals=proposals_dict,
+                        synthesis_content=synthesis_content
+                    )
+            asyncio.create_task(run_eval_bg())
 
     ctx_tokens = estimate_tokens(history)
     yield _sse({"type": "round_done", "context_tokens": ctx_tokens, "context_limit": 30000})

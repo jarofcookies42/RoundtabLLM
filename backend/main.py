@@ -35,7 +35,7 @@ from .database import init_db, get_session
 from .models import Conversation, Message, ContextDoc, RawImport, MemoryFile, DreamLog
 from .memory.autodream import generate_dream, apply_dream_changes
 from .memory.compaction import compact_conversation
-from .config import AUTH_TOKEN
+from .config import AUTH_TOKEN, SessionConfig
 from .llm.router import run_round, run_blind, run_debate
 from .context import get_current_context, update_context
 from .importers.chatgpt import parse_chatgpt_export
@@ -76,6 +76,8 @@ def verify_auth(request: Request):
 class ChatRequest(BaseModel):
     message: str
     conversation_id: int | None = None
+    config: SessionConfig | None = None  # Composable config payload
+    # Legacy flat properties as fallback:
     mode: str = "regular"
     anchor: str = "knowledge"
     protocol: str = "roundtable"
@@ -84,6 +86,7 @@ class ChatRequest(BaseModel):
     context_mode: str = "full"                       # "full", "select", or "none"
     selected_topics: list[str] | None = None         # ["thesis", "projects"] for select mode
     forced_dissent: bool = False
+    routing_enabled: bool = False
 
 
 class ContextUpdateRequest(BaseModel):
@@ -119,6 +122,21 @@ async def send_chat(
     _auth = Depends(verify_auth),
 ):
     """Create or continue a conversation. Returns conversation_id for SSE streaming."""
+    # Resolve SessionConfig
+    if req.config:
+        config = req.config
+    else:
+        config = SessionConfig(
+            mode=req.mode,
+            anchor=req.anchor,
+            protocol=req.protocol,
+            participants=req.enabled_models,
+            context_mode=req.context_mode,
+            selected_topics=req.selected_topics,
+            forced_dissent=req.forced_dissent,
+            routing_enabled=req.routing_enabled
+        )
+
     if req.conversation_id:
         conv = session.get(Conversation, req.conversation_id)
         if not conv:
@@ -126,24 +144,37 @@ async def send_chat(
         # Log warnings if request doesn't match locked config
         import logging
         logger = logging.getLogger("roundtable")
-        if conv.mode != req.mode:
-            logger.warning(f"Config mismatch: mode is locked to '{conv.mode}' but request asked for '{req.mode}'")
-        if conv.anchor != req.anchor:
-            logger.warning(f"Config mismatch: anchor is locked to '{conv.anchor}' but request asked for '{req.anchor}'")
-        if conv.protocol != req.protocol:
-            logger.warning(f"Config mismatch: protocol is locked to '{conv.protocol}' but request asked for '{req.protocol}'")
-        if getattr(conv, "forced_dissent", False) != req.forced_dissent:
-            logger.warning(f"Config mismatch: forced_dissent is locked to '{getattr(conv, 'forced_dissent', False)}' but request asked for '{req.forced_dissent}'")
+        
+        # Load existing config for comparison
+        existing_config = None
+        if conv.config:
+            try:
+                existing_config = SessionConfig.model_validate_json(conv.config)
+            except Exception:
+                pass
+        
+        if existing_config:
+            if existing_config.mode != config.mode:
+                logger.warning(f"Config mismatch: mode is locked to '{existing_config.mode}' but request asked for '{config.mode}'")
+            if existing_config.anchor != config.anchor:
+                logger.warning(f"Config mismatch: anchor is locked to '{existing_config.anchor}' but request asked for '{config.anchor}'")
+            if existing_config.protocol != config.protocol:
+                logger.warning(f"Config mismatch: protocol is locked to '{existing_config.protocol}' but request asked for '{config.protocol}'")
+            if existing_config.forced_dissent != config.forced_dissent:
+                logger.warning(f"Config mismatch: forced_dissent is locked to '{existing_config.forced_dissent}' but request asked for '{config.forced_dissent}'")
+            if existing_config.routing_enabled != config.routing_enabled:
+                logger.warning(f"Config mismatch: routing_enabled is locked to '{existing_config.routing_enabled}' but request asked for '{config.routing_enabled}'")
     else:
         title = req.message[:50] + ("..." if len(req.message) > 50 else "")
         conv = Conversation(
             title=title,
-            mode=req.mode,
-            anchor=req.anchor,
-            protocol=req.protocol,
-            context_mode=req.context_mode,
-            selected_topics=_json.dumps(req.selected_topics) if req.selected_topics else None,
-            forced_dissent=req.forced_dissent,
+            mode=config.mode,
+            anchor=config.anchor,
+            protocol=config.protocol,
+            context_mode=config.context_mode,
+            selected_topics=_json.dumps(config.selected_topics) if config.selected_topics else None,
+            forced_dissent=config.forced_dissent,
+            config=config.model_dump_json()
         )
         session.add(conv)
         session.commit()
@@ -163,9 +194,10 @@ async def send_chat(
     session.commit()
 
     # Store mutable continuation details
-    conv.context_mode = req.context_mode
-    conv.selected_topics = _json.dumps(req.selected_topics) if req.selected_topics else None
+    conv.context_mode = config.context_mode
+    conv.selected_topics = _json.dumps(config.selected_topics) if config.selected_topics else None
     conv.updated_at = datetime.utcnow()
+    conv.config = config.model_dump_json()
     session.add(conv)
     session.commit()
 
@@ -175,12 +207,14 @@ async def send_chat(
         "anchor": conv.anchor,
         "protocol": conv.protocol,
         "forced_dissent": getattr(conv, "forced_dissent", False),
+        "config": _json.loads(conv.config) if conv.config else None,
     }
 
 
 @app.get("/chat/stream/{conversation_id}")
 async def stream_chat(
     conversation_id: int,
+    config: str | None = None,  # JSON-serialized SessionConfig
     mode: str = "regular",
     anchor: str = "knowledge",
     protocol: str = "roundtable",
@@ -190,6 +224,7 @@ async def stream_chat(
     selected_topics: str | None = None,
     model_overrides: str | None = None,
     forced_dissent: bool = False,
+    routing_enabled: bool = False,
     session: Session = Depends(get_session),
     _auth = Depends(verify_auth),
 ):
@@ -210,7 +245,6 @@ async def stream_chat(
         raise HTTPException(400, "No user message found")
 
     context_content = get_current_context(session)
-    model_list = [m.strip() for m in enabled_models.split(",")]
 
     # Parse debate_roles and selected_topics from JSON query params
     parsed_debate_roles = None
@@ -227,6 +261,27 @@ async def stream_chat(
         except _json.JSONDecodeError:
             pass
 
+    # Resolve SessionConfig
+    session_config = None
+    if config:
+        try:
+            session_config = SessionConfig.model_validate_json(config)
+        except Exception:
+            pass
+
+    if not session_config:
+        model_list = [m.strip() for m in enabled_models.split(",")]
+        session_config = SessionConfig(
+            mode=mode,
+            anchor=anchor,
+            protocol=protocol,
+            participants=model_list,
+            context_mode=context_mode,
+            selected_topics=parsed_selected_topics,
+            forced_dissent=forced_dissent,
+            routing_enabled=routing_enabled
+        )
+
     parsed_model_overrides = None
     if model_overrides:
         try:
@@ -239,20 +294,15 @@ async def stream_chat(
         common_kwargs = dict(
             conversation_id=conversation_id,
             user_message=user_msg.content,
-            mode=mode,
-            anchor=anchor,
-            enabled_models=model_list,
+            config=session_config,
             context_content=context_content,
             session=session,
-            context_mode=context_mode,
-            selected_topics=parsed_selected_topics,
             model_overrides=parsed_model_overrides,
-            forced_dissent=forced_dissent,
         )
-        if protocol == "debate":
+        if session_config.protocol == "debate":
             async for event in run_debate(**common_kwargs, debate_roles=parsed_debate_roles):
                 yield event
-        elif protocol == "blind":
+        elif session_config.protocol == "blind":
             async for event in run_blind(**common_kwargs):
                 yield event
         else:
@@ -290,6 +340,7 @@ async def list_conversations(
             "context_mode": c.context_mode,
             "selected_topics": _json.loads(c.selected_topics) if c.selected_topics else None,
             "forced_dissent": getattr(c, "forced_dissent", False),
+            "config": _json.loads(c.config) if c.config else None,
             "updated_at": str(c.updated_at)
         }
         for c in convs
@@ -359,7 +410,19 @@ async def get_conversation(
     ).all()
 
     return {
-        "conversation": conv,
+        "conversation": {
+            "id": conv.id,
+            "title": conv.title,
+            "mode": conv.mode,
+            "anchor": conv.anchor,
+            "protocol": conv.protocol,
+            "context_mode": conv.context_mode,
+            "selected_topics": _json.loads(conv.selected_topics) if conv.selected_topics else None,
+            "forced_dissent": getattr(conv, "forced_dissent", False),
+            "config": _json.loads(conv.config) if conv.config else None,
+            "created_at": str(conv.created_at),
+            "updated_at": str(conv.updated_at),
+        },
         "messages": [
             {"id": m.id, "role": m.role, "model": m.model, "name": m.name,
              "content": m.content, "is_error": m.is_error,

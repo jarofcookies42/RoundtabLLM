@@ -20,7 +20,7 @@ const ALLOWED_TEXT_EXTS = [".md", ".txt", ".py", ".json", ".js", ".ts", ".jsx", 
 const MAX_TEXT_SIZE = 100 * 1024; // 100KB
 const MAX_PDF_SIZE = 1 * 1024 * 1024; // 1MB
 
-export default function ChatView({ messages, activeModel, anchorModel, sending, onSend, onRegenerate, onStop, inputRef, enabledModels, contextTokens, contextLimit, compactionNotice }) {
+export default function ChatView({ messages, activeModel, anchorModel, sending, onSend, onRegenerate, onStop, inputRef, enabledModels, contextTokens, contextLimit, compactionNotice, routingRationale }) {
   const chatEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const [attachedFile, setAttachedFile] = useState(null); // { name, content }
@@ -126,6 +126,73 @@ export default function ChatView({ messages, activeModel, anchorModel, sending, 
             <div style={{ fontSize: 12, color: "#27272A", maxWidth: 360, lineHeight: 1.6 }}>
               Every active model responds in sequence. The last model is the anchor — it synthesizes everyone else's takes.
             </div>
+          </div>
+        )}
+
+        {routingRationale && (
+          <div style={{
+            margin: "0 0 16px 0",
+            padding: "14px 18px",
+            background: "rgba(99, 102, 241, 0.04)",
+            border: "1.5px solid rgba(99, 102, 241, 0.15)",
+            borderRadius: 12,
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+            animation: "slide-up 0.3s ease-out",
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "space-between" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 13, color: "#818CF8", fontWeight: 700, fontFamily: "'Sora', sans-serif" }}>✦ Dynamic Routing Prioritization</span>
+                <span style={{
+                  fontSize: 9,
+                  fontWeight: 800,
+                  color: "#C7D2FE",
+                  background: "rgba(99, 102, 241, 0.25)",
+                  padding: "3px 8px",
+                  borderRadius: 6,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.06em",
+                }}>{routingRationale.category.replace("_", " ")} ({routingRationale.complexity})</span>
+              </div>
+              <span style={{ fontSize: 10, color: "#4B5563" }}>Bayesian Formula: 0.6 * Prior + 0.4 * Internal Ledger</span>
+            </div>
+            <div style={{ fontSize: 12, color: "#D1D5DB", lineHeight: 1.5, fontFamily: "inherit" }}>
+              {routingRationale.explanation} Selected models:{" "}
+              <strong>{routingRationale.selected_models.map(k => MODEL_META[k]?.name || k).join(", ")}</strong>.
+            </div>
+            <details style={{ marginTop: 4 }}>
+              <summary style={{ fontSize: 11, color: "#818CF8", cursor: "pointer", userSelect: "none", fontWeight: 600 }}>
+                View Selection Details & Ledger Metrics
+              </summary>
+              <div style={{
+                marginTop: 8,
+                display: "flex",
+                flexDirection: "column",
+                gap: 6,
+                background: "rgba(0,0,0,0.3)",
+                padding: "10px 12px",
+                borderRadius: 8,
+                border: "1px solid #1F2937",
+              }}>
+                {routingRationale.rationale.map((r, i) => (
+                  <div key={i} style={{ display: "flex", alignItems: "center", fontSize: 11, color: r.chosen ? "#E5E7EB" : "#9CA3AF", opacity: r.chosen ? 1 : 0.6 }}>
+                    <span style={{ width: 20, color: r.chosen ? "#34D399" : "#EF4444", fontWeight: 700 }}>
+                      {r.chosen ? "✓" : "✗"}
+                    </span>
+                    <span style={{ width: 140, fontWeight: r.chosen ? 600 : 400 }}>
+                      {r.model}
+                    </span>
+                    <span style={{ width: 90, fontFamily: "monospace", color: "#F3F4F6" }}>
+                      Score: {r.score.toFixed(3)}
+                    </span>
+                    <span style={{ color: "#9CA3AF", fontSize: 10, flex: 1 }}>
+                      {r.note}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </details>
           </div>
         )}
 

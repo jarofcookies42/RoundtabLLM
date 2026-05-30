@@ -59,6 +59,36 @@ def _migrate(engine):
             conn.execute(sqlalchemy.text("ALTER TABLE conversation ADD COLUMN archived BOOLEAN DEFAULT 0"))
         if "forced_dissent" not in conv_columns:
             conn.execute(sqlalchemy.text("ALTER TABLE conversation ADD COLUMN forced_dissent BOOLEAN DEFAULT 0"))
+        if "config" not in conv_columns:
+            conn.execute(sqlalchemy.text("ALTER TABLE conversation ADD COLUMN config TEXT"))
+            conn.commit()
+
+        # Migrate old null config rows to SessionConfig JSON
+        result = conn.execute(sqlalchemy.text("SELECT id, mode, anchor, protocol, context_mode, selected_topics, forced_dissent FROM conversation WHERE config IS NULL"))
+        for row in result.fetchall():
+            conv_id, mode, anchor, protocol, context_mode, selected_topics, forced_dissent = row
+            import json as _json
+            parsed_topics = None
+            if selected_topics:
+                try:
+                    parsed_topics = _json.loads(selected_topics)
+                except Exception:
+                    pass
+            config_dict = {
+                "mode": mode or "regular",
+                "anchor": anchor or "knowledge",
+                "protocol": protocol or "roundtable",
+                "participants": ["claude", "gpt", "gemini", "grok"],
+                "context_mode": context_mode or "full",
+                "selected_topics": parsed_topics,
+                "forced_dissent": bool(forced_dissent),
+                "routing_enabled": False
+            }
+            config_json = _json.dumps(config_dict)
+            conn.execute(
+                sqlalchemy.text("UPDATE conversation SET config = :config WHERE id = :id"),
+                {"config": config_json, "id": conv_id}
+            )
 
         conn.commit()
 

@@ -5,6 +5,9 @@ All model configs, mode definitions, and env var loading.
 import os
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
+from pydantic import BaseModel, Field
+from typing import List, Optional, Any
+
 
 load_dotenv(override=True)
 
@@ -51,6 +54,18 @@ class ModelConfig:
     # Gemini-specific
     thinking_level: str | None = None      # "low", "medium", "high"
     top_p: float | None = None
+
+
+class SessionConfig(BaseModel):
+    """Unified composed session configuration for RoundtabLLM."""
+    mode: str = "regular"                # "regular" | "overdrive"
+    protocol: str = "roundtable"          # "roundtable" | "blind" | "debate"
+    anchor: str = "knowledge"            # "knowledge" | "abstract"
+    participants: List[str] = Field(default_factory=lambda: ["claude", "gpt", "gemini", "grok", "ollama"])
+    context_mode: str = "full"            # "full" | "select" | "none"
+    selected_topics: Optional[List[str]] = None
+    forced_dissent: bool = False
+    routing_enabled: bool = False
 
 
 # ============================================================

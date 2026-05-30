@@ -15,10 +15,20 @@ const headers = () => {
   };
 };
 
-export async function sendMessage({ message, conversation_id, mode, anchor, protocol, enabled_models, debate_roles, context_mode, selected_topics, forced_dissent }) {
-  const body = { message, conversation_id, mode, anchor, protocol, enabled_models, context_mode, forced_dissent };
+export async function sendMessage({ message, conversation_id, config, mode, anchor, protocol, enabled_models, debate_roles, context_mode, selected_topics, forced_dissent }) {
+  const body = { message, conversation_id };
+  if (config) {
+    body.config = config;
+  } else {
+    body.mode = mode;
+    body.anchor = anchor;
+    body.protocol = protocol;
+    body.enabled_models = enabled_models;
+    body.context_mode = context_mode;
+    body.forced_dissent = forced_dissent;
+    if (selected_topics) body.selected_topics = selected_topics;
+  }
   if (debate_roles) body.debate_roles = debate_roles;
-  if (selected_topics) body.selected_topics = selected_topics;
   const res = await fetch("/chat", {
     method: "POST",
     headers: headers(),

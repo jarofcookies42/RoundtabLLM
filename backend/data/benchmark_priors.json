@@ -1,0 +1,57 @@
+[
+  {
+    "model_key": "claude",
+    "display_name": "Claude",
+    "categories": {
+      "coding_agentic": {"score": 0.81, "source": "SWE-bench Verified (Sonnet 4.6)"},
+      "science_reasoning": {"score": 0.94, "source": "GPQA Diamond (Opus 4.8)"},
+      "math": {"score": 0.85, "source": "AIME 2026"},
+      "writing": {"score": 0.92, "source": "LMArena"},
+      "tool_use": {"score": 0.88, "source": "tau-bench"}
+    }
+  },
+  {
+    "model_key": "gpt",
+    "display_name": "GPT",
+    "categories": {
+      "coding_agentic": {"score": 0.78, "source": "SWE-bench Verified (GPT-5.5)"},
+      "science_reasoning": {"score": 0.90, "source": "GPQA Diamond (GPT-5.5)"},
+      "math": {"score": 0.92, "source": "AIME 2026 (GPT-5.5)"},
+      "writing": {"score": 0.89, "source": "LMArena"},
+      "tool_use": {"score": 0.90, "source": "tau-bench"}
+    }
+  },
+  {
+    "model_key": "gemini",
+    "display_name": "Gemini",
+    "categories": {
+      "coding_agentic": {"score": 0.75, "source": "SWE-bench Verified"},
+      "science_reasoning": {"score": 0.82, "source": "GPQA Diamond"},
+      "math": {"score": 0.78, "source": "AIME 2026"},
+      "writing": {"score": 0.85, "source": "LMArena"},
+      "tool_use": {"score": 0.86, "source": "tau-bench"}
+    }
+  },
+  {
+    "model_key": "grok",
+    "display_name": "Grok",
+    "categories": {
+      "coding_agentic": {"score": 0.72, "source": "SWE-bench Verified"},
+      "science_reasoning": {"score": 0.80, "source": "GPQA Diamond"},
+      "math": {"score": 0.82, "source": "AIME 2026"},
+      "writing": {"score": 0.87, "source": "LMArena"},
+      "tool_use": {"score": 0.80, "source": "tau-bench"}
+    }
+  },
+  {
+    "model_key": "ollama",
+    "display_name": "Ollama (Local)",
+    "categories": {
+      "coding_agentic": {"score": 0.35, "source": "Manual"},
+      "science_reasoning": {"score": 0.40, "source": "Manual"},
+      "math": {"score": 0.45, "source": "Manual"},
+      "writing": {"score": 0.60, "source": "Manual"},
+      "tool_use": {"score": 0.50, "source": "Manual"}
+    }
+  }
+]

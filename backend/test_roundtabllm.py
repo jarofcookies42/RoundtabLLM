@@ -317,6 +317,75 @@ class TestRoundtabLLM(unittest.TestCase):
         )
         self.assertEqual(resolve_grok_model(cfg_grok_nothinking), GROK_MODEL_ID)
 
+    def test_session_config_and_routing(self):
+        from backend.config import SessionConfig
+        from backend.routing.selector import select_models
+        from backend.models import ModelScoreInternal
+        
+        # 1. Test SessionConfig default values
+        config = SessionConfig()
+        self.assertEqual(config.mode, "regular")
+        self.assertEqual(config.protocol, "roundtable")
+        self.assertEqual(config.context_mode, "full")
+        self.assertFalse(config.routing_enabled)
+        
+        # 2. Test select_models with empty DB (only priors used)
+        with Session(engine) as session:
+            selected, rationale = select_models(
+                session=session,
+                category="coding_agentic",
+                mode="regular",
+                anchor_mode="knowledge",
+                enabled_models=["claude", "gpt", "gemini", "grok", "ollama"]
+            )
+            # Regular mode selects 3 models
+            self.assertEqual(len(selected), 3)
+            # Claude is knowledge anchor, so it should be forced and at the end of the list
+            self.assertEqual(selected[-1], "claude")
+            self.assertIn("claude", selected)
+            self.assertIn("gpt", selected)
+            self.assertIn("gemini", selected)
+            self.assertNotIn("grok", selected)
+
+            # 3. Add an internal score to override prior for grok to 1.0 (sample size 50 so weight is 0.4)
+            session.add(ModelScoreInternal(model="grok", category="coding_agentic", rolling_average=1.0, sample_count=50))
+            session.commit()
+            
+            # Re-select. Now grok should score high enough to beat Gemini
+            selected2, rationale2 = select_models(
+                session=session,
+                category="coding_agentic",
+                mode="regular",
+                anchor_mode="knowledge",
+                enabled_models=["claude", "gpt", "gemini", "grok", "ollama"]
+            )
+            self.assertEqual(len(selected2), 3)
+            self.assertIn("grok", selected2)
+            self.assertIn("claude", selected2)  # Claude forced inclusion
+            self.assertEqual(selected2[-1], "claude")  # Anchor preserved
+
+        # 4. Test /chat endpoint accepting config object
+        config_payload = {
+            "message": "Dynamic routing test",
+            "config": {
+                "mode": "overdrive",
+                "protocol": "blind",
+                "anchor": "abstract",
+                "participants": ["claude", "gemini"],
+                "context_mode": "none",
+                "selected_topics": [],
+                "forced_dissent": True,
+                "routing_enabled": True
+            }
+        }
+        res = self.client.post("/chat", json=config_payload, headers=self.auth_headers)
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["mode"], "overdrive")
+        self.assertEqual(data["protocol"], "blind")
+        self.assertEqual(data["anchor"], "abstract")
+        self.assertTrue(data["config"]["routing_enabled"])
+
 
 if __name__ == "__main__":
     unittest.main()
